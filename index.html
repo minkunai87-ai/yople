@@ -296,9 +296,10 @@
             </div>
             
             <div class="modal-btns">
-                <button class="modal-btn btn-save" onclick="saveTR()">적용하기</button>
+                <button class="modal-btn btn-save" id="tr-save-button" onclick="saveTR()">적용하기</button>
                 <button class="modal-btn btn-cancel" onclick="document.getElementById('tr-modal').style.display='none'">닫기</button>
             </div>
+            <div id="tr-sync-status" style="display:none; margin-top:10px; color:var(--text-sub); font-size:0.8rem; text-align:center;">학습 데이터 동기화 중…</div>
         </div>
     </div>
 
@@ -543,6 +544,13 @@
     let pendingStartupViewState = null;
     let inMemoryStatsStore = null;
     let statsPersistencePromise = Promise.resolve(true);
+    let statsWriteQueue = Promise.resolve(true);
+    let statsWritesInProgress = 0;
+    let statsWriteQueuedRevision = 0;
+    let statsWriteCompletedRevision = 0;
+    let lastStatsMemoryChangedAt = 0;
+    let lastStatsIndexedDbSavedAt = 0;
+    let lastPersistedStatsSnapshot = null;
     let statsIndexedDbReady = false;
     let statsIndexedDbLoadFailed = false;
     let deckLoadReady = false;
@@ -620,6 +628,7 @@
                 const parsedStats = parseJSONSafe(value, {});
                 if(parsedStats && typeof parsedStats === 'object') {
                     inMemoryStatsStore = parsedStats;
+                    lastStatsMemoryChangedAt = Date.now();
                     statsPersistencePromise = saveStatsToIndexedDBFallback(parsedStats);
                 }
                 removeStorageItem(STORAGE_KEY_STATS);
@@ -636,6 +645,7 @@
                     const parsedStats = parseJSONSafe(value, {});
                     if(parsedStats && typeof parsedStats === 'object') {
                         inMemoryStatsStore = parsedStats;
+                        lastStatsMemoryChangedAt = Date.now();
                         statsPersistencePromise = saveStatsToIndexedDBFallback(parsedStats);
                     }
                     removeStorageItem(STORAGE_KEY_STATS);
@@ -999,7 +1009,21 @@
     function openTRModal() {
         document.getElementById('tr-input').value = Math.round(targetRetention * 100);
         document.getElementById('tr-modal').style.display = 'flex';
+        updateFullRecalcButtonState();
         toggleMenu(); 
+    }
+
+    function updateFullRecalcButtonState() {
+        const button = document.getElementById('tr-save-button');
+        const status = document.getElementById('tr-sync-status');
+        const selected = document.querySelector('input[name="tr-mode"]:checked');
+        if(!button || !status) return;
+        const recalcMode = selected && selected.value === 'recalc';
+        const syncing = isBooting || restoreInProgress || !statsIndexedDbReady || statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision;
+        const busy = recalcMode && (syncing || isFullRecalculating);
+        button.disabled = !!busy;
+        status.style.display = busy ? 'block' : 'none';
+        status.innerText = isFullRecalculating ? '전면 재계산 중…' : '학습 데이터 동기화 중…';
     }
     
     function updateTRButton() {
@@ -1013,9 +1037,19 @@
         if(val >= 70 && val <= 99) {
             const nextRetention = val / 100;
             if (applyMode === 'recalc') {
+                updateFullRecalcButtonState();
+                if(isBooting || restoreInProgress || !statsIndexedDbReady || statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision) {
+                    showToast('학습 데이터 동기화가 끝난 뒤 다시 시도해 주세요.', 'normal');
+                    return;
+                }
                 const result = await performSafeFullFsrsRecalculation(nextRetention);
                 if(!result.ok) {
-                    showToast(`전면 재계산 실패·롤백 완료: ${result.error}`, 'error');
+                    if(result.error === 'RECALC_SOURCE_MEMORY_IDB_MISMATCH' && result.diagnostics) {
+                        const d = result.diagnostics;
+                        showToast(`메모리와 저장 데이터가 일치하지 않아 재계산을 중단했습니다. 메모리 Stats ${d.memoryCount}개 · IndexedDB Stats ${d.indexedDbCount}개 · 메모리 전용 ${d.memoryOnly.length}개 · IndexedDB 전용 ${d.indexedDbOnly.length}개 · 내용 불일치 ${d.contentMismatch.length}개. 현재 데이터는 변경되지 않았습니다.`, 'error');
+                    } else {
+                        showToast(`전면 재계산을 안전하게 중단했습니다: ${result.error}. 현재 데이터는 변경되지 않았습니다.`, 'error');
+                    }
                     return;
                 }
                 const s = result.summary;
@@ -1077,6 +1111,154 @@
         return true;
     }
 
+    const STATS_RUNTIME_ONLY_FIELDS = new Set(['_runtime', '__runtime', 'runtimeOnly']);
+    const STATS_NUMERIC_FIELDS = new Set([
+        'correct', 'total', 'interval', 'dueDate', 'updatedAt', 'lastUpdated', 'modifiedAt',
+        'lastDate', 'lastReviewed', 'time', 'score', 'D', 'S', 'reps', 'stability',
+        'difficulty', 'retrievability', 'scheduledDays', 'elapsedDays', 'lastReview', 'nextReviewDate'
+    ]);
+
+    function normalizeStatsValueForSourceComparison(value, key = '', isRoot = false) {
+        if(value instanceof Date) return value.toISOString();
+        if(value === undefined || typeof value === 'function' || typeof value === 'symbol') return undefined;
+        if(value === null || typeof value !== 'object') {
+            if(STATS_NUMERIC_FIELDS.has(key) && typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+            return value;
+        }
+        if(Array.isArray(value)) return value.map(item => normalizeStatsValueForSourceComparison(item, '', false)).filter(item => item !== undefined);
+        const normalized = {};
+        Object.keys(value).sort().forEach(childKey => {
+            if(STATS_RUNTIME_ONLY_FIELDS.has(childKey)) return;
+            const child = normalizeStatsValueForSourceComparison(value[childKey], childKey, false);
+            if(child === undefined) return;
+            if(!isRoot && child && typeof child === 'object' && !Array.isArray(child) && Object.keys(child).length === 0) return;
+            normalized[childKey] = child;
+        });
+        return normalized;
+    }
+
+    function normalizeStatsForSourceComparison(stats) {
+        return normalizeStatsValueForSourceComparison(stats && typeof stats === 'object' ? stats : {}, '', true);
+    }
+
+    function getStatsSourceDiagnostics(memoryStats, indexedDbStats) {
+        const memory = normalizeStatsForSourceComparison(memoryStats);
+        const indexedDb = normalizeStatsForSourceComparison(indexedDbStats);
+        const memoryIds = Object.keys(memory).sort();
+        const indexedDbIds = Object.keys(indexedDb).sort();
+        const memorySet = new Set(memoryIds);
+        const indexedDbSet = new Set(indexedDbIds);
+        const memoryOnly = memoryIds.filter(id => !indexedDbSet.has(id));
+        const indexedDbOnly = indexedDbIds.filter(id => !memorySet.has(id));
+        const contentMismatch = memoryIds.filter(id => indexedDbSet.has(id) && stableStringify(memory[id]) !== stableStringify(indexedDb[id]));
+        const memoryTotals = getStatsPreservationSnapshot(memory, {});
+        const indexedDbTotals = getStatsPreservationSnapshot(indexedDb, {});
+        return {
+            equal: memoryOnly.length === 0 && indexedDbOnly.length === 0 && contentMismatch.length === 0,
+            memoryCount: memoryIds.length,
+            indexedDbCount: indexedDbIds.length,
+            memoryOnly,
+            indexedDbOnly,
+            contentMismatch,
+            memoryHistoryCount: memoryTotals.historyCount,
+            indexedDbHistoryCount: indexedDbTotals.historyCount,
+            memoryCorrectTotal: memoryTotals.correctTotal,
+            indexedDbCorrectTotal: indexedDbTotals.correctTotal,
+            memoryReviewTotal: memoryTotals.reviewTotal,
+            indexedDbReviewTotal: indexedDbTotals.reviewTotal,
+            lastLocalChangeAt: getLocalDataUpdatedAt(),
+            lastStatsMemoryChangedAt,
+            lastStatsIndexedDbSavedAt,
+            statsWritesInProgress,
+            pendingWriteCount: Math.max(0, statsWriteQueuedRevision - statsWriteCompletedRevision),
+            bootComplete: !isBooting,
+            restoreInProgress,
+            statsIndexedDbReady
+        };
+    }
+
+    function logStatsSourceDiagnostics(diagnostics, stage) {
+        console.warn('[Yople Recalculation Source Diagnostics]', {
+            stage,
+            memoryCount: diagnostics.memoryCount,
+            indexedDbCount: diagnostics.indexedDbCount,
+            memoryOnlyCount: diagnostics.memoryOnly.length,
+            indexedDbOnlyCount: diagnostics.indexedDbOnly.length,
+            contentMismatchCount: diagnostics.contentMismatch.length,
+            memoryOnlyUuids: diagnostics.memoryOnly.slice(0, 50),
+            indexedDbOnlyUuids: diagnostics.indexedDbOnly.slice(0, 50),
+            contentMismatchUuids: diagnostics.contentMismatch.slice(0, 50),
+            lastLocalChangeAt: diagnostics.lastLocalChangeAt,
+            lastStatsMemoryChangedAt: diagnostics.lastStatsMemoryChangedAt,
+            lastStatsIndexedDbSavedAt: diagnostics.lastStatsIndexedDbSavedAt,
+            statsWritesInProgress: diagnostics.statsWritesInProgress,
+            pendingWriteCount: diagnostics.pendingWriteCount,
+            bootComplete: diagnostics.bootComplete,
+            restoreInProgress: diagnostics.restoreInProgress,
+            statsIndexedDbReady: diagnostics.statsIndexedDbReady
+        });
+    }
+
+    async function waitForPendingStatsWrites() {
+        let observed;
+        do {
+            observed = statsWriteQueue;
+            await observed;
+        } while(observed !== statsWriteQueue || statsWritesInProgress > 0);
+        return true;
+    }
+
+    function assertStatsSourceVerification(expected, actual, stage) {
+        const expectedSnapshot = getStatsPreservationSnapshot(normalizeStatsForSourceComparison(expected), {});
+        const actualSnapshot = getStatsPreservationSnapshot(normalizeStatsForSourceComparison(actual), {});
+        assertStatsPreserved(expectedSnapshot, actualSnapshot, stage);
+        const diagnostics = getStatsSourceDiagnostics(expected, actual);
+        if(!diagnostics.equal) throw Object.assign(new Error(`RECALC_SOURCE_VERIFY_${stage}_FAILED`), { diagnostics });
+        return diagnostics;
+    }
+
+    async function resolveStatsSourceForRecalculation() {
+        const pendingAtEntry = statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision;
+        await waitForPendingStatsWrites();
+        let memoryStats = structuredClone(getStatsStore() || {});
+        let indexedDbStats = structuredClone(await readStatsFromIndexedDBForBackup());
+        let diagnostics = getStatsSourceDiagnostics(memoryStats, indexedDbStats);
+        logStatsSourceDiagnostics(diagnostics, 'after-pending-writes');
+        if(diagnostics.equal) return { stats: memoryStats, resolution: pendingAtEntry ? 'pending-write-completed' : 'already-equal', diagnostics };
+
+        const memoryIdsCoverIndexedDb = diagnostics.indexedDbOnly.length === 0;
+        const indexedDbIdsCoverMemory = diagnostics.memoryOnly.length === 0;
+        const memoryValidation = validateStatsCardIds(memoryStats);
+        const memoryClearlyNewer = !isBooting && !restoreInProgress && diagnostics.memoryCount > 0 &&
+            diagnostics.memoryCount >= diagnostics.indexedDbCount && memoryIdsCoverIndexedDb && memoryValidation.valid &&
+            lastStatsMemoryChangedAt > lastStatsIndexedDbSavedAt;
+
+        if(memoryClearlyNewer) {
+            const saved = await saveStatsToIndexedDBFallback(memoryStats);
+            if(!saved) throw Object.assign(new Error('RECALC_SOURCE_MEMORY_FLUSH_FAILED'), { diagnostics });
+            await waitForPendingStatsWrites();
+            indexedDbStats = structuredClone(await readStatsFromIndexedDBForBackup());
+            diagnostics = assertStatsSourceVerification(memoryStats, indexedDbStats, 'MEMORY_FLUSH');
+            logStatsSourceDiagnostics(diagnostics, 'memory-flush-verified');
+            return { stats: memoryStats, resolution: 'memory-flushed-to-indexeddb', diagnostics };
+        }
+
+        const indexedDbClearlyNewer = !restoreInProgress && diagnostics.indexedDbCount > 0 &&
+            diagnostics.indexedDbCount >= diagnostics.memoryCount && indexedDbIdsCoverMemory &&
+            (diagnostics.memoryCount === 0 || lastStatsIndexedDbSavedAt > lastStatsMemoryChangedAt);
+
+        if(indexedDbClearlyNewer) {
+            inMemoryStatsStore = structuredClone(indexedDbStats);
+            lastStatsMemoryChangedAt = lastStatsIndexedDbSavedAt;
+            memoryStats = structuredClone(getStatsStore() || {});
+            diagnostics = assertStatsSourceVerification(indexedDbStats, memoryStats, 'INDEXEDDB_RELOAD');
+            logStatsSourceDiagnostics(diagnostics, 'indexeddb-reload-verified');
+            return { stats: memoryStats, resolution: 'indexeddb-reloaded-to-memory', diagnostics };
+        }
+
+        throw Object.assign(new Error('RECALC_SOURCE_MEMORY_IDB_MISMATCH'), { diagnostics });
+    }
+
     function recalculateFsrsScheduleFromHistory(history, newTargetRetention) {
         if(!Array.isArray(history) || !history.length) return null;
         const events = history.map((item, index) => {
@@ -1117,20 +1299,26 @@
 
     async function performSafeFullFsrsRecalculation(newTargetRetention) {
         if(isFullRecalculating) return { ok: false, error: 'RECALC_ALREADY_RUNNING' };
+        if(isBooting || restoreInProgress || !statsIndexedDbReady) return { ok: false, error: 'RECALC_STATS_SYNC_IN_PROGRESS' };
         const previousRetention = targetRetention;
         const previousRetentionStorage = getStorageItem(STORAGE_KEY_TARGET_RETENTION);
         const previousDirtyState = isDataChanged;
         let memorySnapshot = null;
         let indexedDbSnapshot = null;
+        let mutationStarted = false;
+        let sourceResolution = null;
         isFullRecalculating = true;
+        updateFullRecalcButtonState();
         if(backupTimer) { clearTimeout(backupTimer); backupTimer = null; }
         try {
-            await statsPersistencePromise;
-            memorySnapshot = structuredClone(getStatsStore() || {});
+            sourceResolution = await resolveStatsSourceForRecalculation();
+            memorySnapshot = structuredClone(sourceResolution.stats);
             indexedDbSnapshot = structuredClone(await readStatsFromIndexedDBForBackup());
-            if(stableStringify(memorySnapshot) !== stableStringify(indexedDbSnapshot)) throw new Error('RECALC_SOURCE_MEMORY_IDB_MISMATCH');
+            assertStatsSourceVerification(memorySnapshot, indexedDbSnapshot, 'RESOLVED_SOURCE');
+            if(sourceResolution.resolution !== 'already-equal') showToast('학습 데이터 동기화를 완료한 뒤 전면 재계산을 시작합니다.', 'normal');
             const notesSnapshot = structuredClone(getNotesByCardUuid());
             const before = getStatsPreservationSnapshot(memorySnapshot, notesSnapshot);
+            if(before.statsCount === 0) throw new Error('RECALC_EMPTY_STATS_BLOCKED');
             const temporaryStats = {};
             const failures = [];
             let recalculatedCount = 0;
@@ -1159,7 +1347,9 @@
 
             const calculated = getStatsPreservationSnapshot(temporaryStats, getNotesByCardUuid());
             assertStatsPreserved(before, calculated, 'CALCULATED');
+            mutationStarted = true;
             inMemoryStatsStore = temporaryStats;
+            lastStatsMemoryChangedAt = Date.now();
             statsPersistencePromise = saveStatsToIndexedDBFallback(temporaryStats);
             const saved = await statsPersistencePromise;
             if(!saved) throw new Error('RECALC_INDEXEDDB_SAVE_FAILED');
@@ -1183,7 +1373,8 @@
                 correctTotal: before.correctTotal,
                 totalSum: before.reviewTotal,
                 targetRetention: newTargetRetention,
-                failures
+                failures,
+                sourceResolution: sourceResolution.resolution
             };
             console.log('[Yople Full FSRS Recalculation]', summary);
             isFullRecalculating = false;
@@ -1191,8 +1382,9 @@
             return { ok: true, summary };
         } catch(error) {
             console.error('[Yople Full FSRS Recalculation Rollback]', error);
-            if(indexedDbSnapshot) {
+            if(mutationStarted && indexedDbSnapshot) {
                 inMemoryStatsStore = structuredClone(memorySnapshot || indexedDbSnapshot);
+                lastStatsMemoryChangedAt = Date.now();
                 statsPersistencePromise = saveStatsToIndexedDBFallback(indexedDbSnapshot);
                 await statsPersistencePromise;
             }
@@ -1201,9 +1393,10 @@
             else setStorageItem(STORAGE_KEY_TARGET_RETENTION, previousRetentionStorage);
             updateTRButton();
             isDataChanged = previousDirtyState;
-            return { ok: false, error: error && error.message ? error.message : String(error) };
+            return { ok: false, error: error && error.message ? error.message : String(error), diagnostics: error && error.diagnostics ? error.diagnostics : null };
         } finally {
             isFullRecalculating = false;
+            updateFullRecalcButtonState();
         }
     }
 
@@ -1337,6 +1530,7 @@
     window.onload = async function() {
         try {
             initializeHeaderTitleFitting();
+            document.querySelectorAll('input[name="tr-mode"]').forEach(input => input.addEventListener('change', updateFullRecalcButtonState));
             document.title = APP_VERSION;
             const versionLabel = document.getElementById('app-version-label');
             if(versionLabel) versionLabel.innerText = APP_VERSION;
@@ -1381,6 +1575,7 @@
             const loading = document.getElementById('loading');
             if(loading && Object.keys(library || {}).length) loading.style.display = 'none';
             isBooting = false;
+            updateFullRecalcButtonState();
         }
     };
 
@@ -1870,6 +2065,7 @@
         if(normalizedBackupPath !== FIREBASE_BACKUP_PATH) throw new Error('BLOCKED_INVALID_BACKUP_ROOT');
         const localSnapshot = captureLocalRestoreSnapshot();
         restoreInProgress = true;
+        updateFullRecalcButtonState();
         try {
             logYokiStorageEnvironment('restore:start');
             const res = await firebaseRequest(`${normalizedBackupPath}/${ts}`, { cache: 'no-store' });
@@ -1918,6 +2114,7 @@
             return false;
         } finally {
             restoreInProgress = false;
+            updateFullRecalcButtonState();
         }
     }
     async function deleteFirebaseBackup(ts, backupPath = FIREBASE_BACKUP_PATH, options = {}) {
@@ -3724,23 +3921,48 @@
         });
     }
 
-    async function saveStatsToIndexedDBFallback(stats) {
+    async function persistStatsToIndexedDB(stats) {
+        const db = await openYokiIndexedDB();
         try {
-            const db = await openYokiIndexedDB();
             await new Promise((resolve, reject) => {
                 const tx = db.transaction(YOKI_IDB_STORE, 'readwrite');
                 tx.objectStore(YOKI_IDB_STORE).put(stats, YOKI_IDB_STATS_KEY);
                 tx.oncomplete = resolve;
                 tx.onerror = () => reject(tx.error || new Error('IndexedDB stats save failed'));
             });
+        } finally {
             db.close();
-            statsIndexedDbReady = true;
-            console.log('[Yople IndexedDB Stats Save]', { count: Object.keys(stats || {}).length });
-            return true;
-        } catch(e) {
-            console.error('[Yople IndexedDB Stats Save Error]', e);
-            return false;
         }
+    }
+
+    function saveStatsToIndexedDBFallback(stats) {
+        const snapshot = structuredClone(stats && typeof stats === 'object' ? stats : {});
+        const revision = ++statsWriteQueuedRevision;
+        const queuedWrite = statsWriteQueue.catch(() => false).then(async () => {
+            statsWritesInProgress++;
+            updateFullRecalcButtonState();
+            try {
+                await persistStatsToIndexedDB(snapshot);
+                statsIndexedDbReady = true;
+                statsIndexedDbLoadFailed = false;
+                lastStatsIndexedDbSavedAt = Date.now();
+                lastPersistedStatsSnapshot = structuredClone(snapshot);
+                statsWriteCompletedRevision = Math.max(statsWriteCompletedRevision, revision);
+                console.log('[Yople IndexedDB Stats Save]', { count: Object.keys(snapshot).length, revision });
+                return true;
+            } catch(e) {
+                console.error('[Yople IndexedDB Stats Save Error]', e);
+                return false;
+            } finally {
+                statsWriteCompletedRevision = Math.max(statsWriteCompletedRevision, revision);
+                statsWritesInProgress--;
+                updateFullRecalcButtonState();
+            }
+        });
+        statsWriteQueue = queuedWrite;
+        statsPersistencePromise = queuedWrite;
+        updateFullRecalcButtonState();
+        return queuedWrite;
     }
 
     async function loadStatsFromIndexedDBFallback() {
@@ -3757,19 +3979,24 @@
                 const localStats = parseJSONSafe(getStorageItem(STORAGE_KEY_STATS), {});
                 if (Object.keys(stats).length > Object.keys(localStats || {}).length) {
                     inMemoryStatsStore = stats;
+                    lastPersistedStatsSnapshot = structuredClone(stats);
+                    lastStatsIndexedDbSavedAt = getLocalDataUpdatedAt() || Date.now();
+                    lastStatsMemoryChangedAt = lastStatsIndexedDbSavedAt;
                     console.log('[Yople IndexedDB Stats Loaded]', { count: Object.keys(stats).length });
                 }
             }
             statsIndexedDbReady = true;
             statsIndexedDbLoadFailed = false;
+            updateFullRecalcButtonState();
         } catch(e) {
             statsIndexedDbLoadFailed = true;
             console.error('[Yople IndexedDB Stats Load Error]', e);
+            updateFullRecalcButtonState();
         }
     }
 
     async function readStatsFromIndexedDBForBackup() {
-        await statsPersistencePromise;
+        await waitForPendingStatsWrites();
         if(statsIndexedDbLoadFailed) throw new Error('INDEXEDDB_STATS_READ_FAILED');
         const db = await openYokiIndexedDB();
         try {

@@ -44,6 +44,40 @@ async function main() {
     return {ids,before:getStatsPreservationSnapshot(stats,getNotesByCardUuid()),raw:structuredClone(stats)};
   })()`);
 
+  const sourceSync=await evaluate(`(async()=>{
+    const ids=${JSON.stringify([])}.concat(Object.values(library).flat().slice(0,4).map(card=>String(card.id)));
+    const base={}; base[ids[0]]={correct:1,total:2,history:[{score:1,time:Date.UTC(2025,0,1)}]}; base[ids[1]]={correct:0,total:0};
+    const reset=async(memory,idb,memoryAt,idbAt)=>{await persistStatsToIndexedDB(structuredClone(idb));inMemoryStatsStore=structuredClone(memory);lastStatsMemoryChangedAt=memoryAt;lastStatsIndexedDbSavedAt=idbAt;statsIndexedDbReady=true;statsIndexedDbLoadFailed=false;};
+    const results={}; const now=Date.now();
+
+    await reset(base,base,now,now); results.identical=(await resolveStatsSourceForRecalculation()).resolution;
+
+    await reset(base,base,now,now); const withPending=structuredClone(base);withPending[ids[2]]={correct:1,total:1};inMemoryStatsStore=withPending;lastStatsMemoryChangedAt=now+10;const pending=saveStatsToIndexedDBFallback(withPending);results.pendingButtonBefore=(()=>{document.querySelector('input[name="tr-mode"][value="recalc"]').checked=true;updateFullRecalcButtonState();return document.getElementById('tr-save-button').disabled})();results.pendingResolution=(await resolveStatsSourceForRecalculation()).resolution;await pending;
+
+    await reset({},base,now,now+10);results.idbLatest=(await resolveStatsSourceForRecalculation()).resolution;
+
+    const orderedMemory={};orderedMemory[ids[0]]={correct:1,total:2};const orderedIdb={};orderedIdb[ids[0]]={total:2,correct:1};await reset(orderedMemory,orderedIdb,now,now);results.keyOrder=(await resolveStatsSourceForRecalculation()).resolution;
+
+    const emptyMemory={};emptyMemory[ids[0]]={correct:1,total:2,metadata:{}};const emptyIdb={};emptyIdb[ids[0]]={correct:1,total:2};await reset(emptyMemory,emptyIdb,now,now);results.emptyObject=(await resolveStatsSourceForRecalculation()).resolution;
+
+    const memoryExtra=structuredClone(base);memoryExtra[ids[2]]={correct:0,total:0};await reset(memoryExtra,base,now+20,now);results.memoryOnly=(await resolveStatsSourceForRecalculation()).resolution;
+
+    const idbExtra=structuredClone(base);idbExtra[ids[2]]={correct:0,total:0};await reset(base,idbExtra,now,now+20);results.idbOnly=(await resolveStatsSourceForRecalculation()).resolution;
+
+    const conflictMemory=structuredClone(base),conflictIdb=structuredClone(base);conflictIdb[ids[0]].history=[{score:2,time:Date.UTC(2025,0,1)}];await reset(conflictMemory,conflictIdb,now,now);try{await resolveStatsSourceForRecalculation();results.historyConflict='missed'}catch(e){results.historyConflict=e.message;results.historyConflictDetails=e.diagnostics.contentMismatch.length}
+
+    statsWritesInProgress=1;updateFullRecalcButtonState();results.writeButtonDisabled=document.getElementById('tr-save-button').disabled;statsWritesInProgress=0;
+    const oldBoot=isBooting;isBooting=true;updateFullRecalcButtonState();results.bootButtonDisabled=document.getElementById('tr-save-button').disabled;results.bootResult=(await performSafeFullFsrsRecalculation(.9)).error;isBooting=oldBoot;updateFullRecalcButtonState();
+
+    const seededStats=${JSON.stringify(seeded.raw)};await reset(seededStats,seededStats,now+30,now+30);results.syncThenRecalc=(await performSafeFullFsrsRecalculation(.9)).ok;
+    return results;
+  })()`);
+  if(sourceSync.identical!=='already-equal'||!sourceSync.pendingButtonBefore||sourceSync.idbLatest!=='indexeddb-reloaded-to-memory')throw new Error(`Basic source sync failed ${JSON.stringify(sourceSync)}`);
+  if(sourceSync.keyOrder!=='already-equal'||sourceSync.emptyObject!=='already-equal')throw new Error(`Normalization failed ${JSON.stringify(sourceSync)}`);
+  if(sourceSync.memoryOnly!=='memory-flushed-to-indexeddb'||sourceSync.idbOnly!=='indexeddb-reloaded-to-memory')throw new Error(`Freshness selection failed ${JSON.stringify(sourceSync)}`);
+  if(sourceSync.historyConflict!=='RECALC_SOURCE_MEMORY_IDB_MISMATCH'||sourceSync.historyConflictDetails!==1)throw new Error(`Ambiguous conflict was not blocked ${JSON.stringify(sourceSync)}`);
+  if(!sourceSync.writeButtonDisabled||!sourceSync.bootButtonDisabled||sourceSync.bootResult!=='RECALC_STATS_SYNC_IN_PROGRESS'||!sourceSync.syncThenRecalc)throw new Error(`UI lock/recalculation failed ${JSON.stringify(sourceSync)}`);
+
   const first=await evaluate(`performSafeFullFsrsRecalculation(.85)`);
   if(!first.ok||first.summary.statsCount!==8||first.summary.failedCount!==1||first.summary.noHistoryCount!==3)throw new Error(`0.85 recalculation failed ${JSON.stringify(first)}`);
   const afterFirst=await evaluate(`({snapshot:getStatsPreservationSnapshot(getStatsStore(),getNotesByCardUuid()),stats:structuredClone(getStatsStore())})`);
@@ -81,7 +115,7 @@ async function main() {
   await evaluate(`location.reload()`); await delay(3000);
   const persisted=await evaluate(`({snapshot:getStatsPreservationSnapshot(getStatsStore(),getNotesByCardUuid()),count:Object.keys(getStatsStore()).length,retention:targetRetention,audit:window.__YOPLE_FIREBASE_AUDIT__})`);
   if(persisted.count!==8||JSON.stringify(persisted.snapshot)!==JSON.stringify(seeded.before))throw new Error('Reload persistence failed');
-  console.log(JSON.stringify({seeded:seeded.before,first:first.summary,second:second.summary,finalBackup,rollback,persisted,firebaseBeforeReload},null,2));
+  console.log(JSON.stringify({sourceSync,seeded:seeded.before,first:first.summary,second:second.summary,finalBackup,rollback,persisted,firebaseBeforeReload},null,2));
   ws.close();
 }
 
