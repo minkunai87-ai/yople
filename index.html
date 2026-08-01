@@ -262,7 +262,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.4 - 반응형 덱 타이틀</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.5 - Anki 원래순서 정렬</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -516,7 +516,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.4 - 반응형 덱 타이틀';
+    const APP_VERSION = 'Yople v11.19.5 - Anki 원래순서 정렬';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -2612,6 +2612,7 @@
             if (fields.length > 0 && String(fields[0] || '').startsWith('#')) return;
             const parsed = parseYokiRow(fields, deck);
             if(!parsed || !parsed.q) return;
+            const originalOrder = normalizeOriginalOrder(fields.at(-1));
 
             let deckNameInRow = parsed.deck || deck;
             let q = parsed.q;
@@ -2638,7 +2639,7 @@
             if (localEditId) { q = localEdits[localEditId].q; a = localEdits[localEditId].a; }
             
             if(!library[deckNameInRow]) library[deckNameInRow] = [];
-            const card = { id: finalId, idCandidates: [...new Set([finalId, ...idCandidates])], q, a, deck: deckNameInRow };
+            const card = { id: finalId, idCandidates: [...new Set([finalId, ...idCandidates])], q, a, deck: deckNameInRow, originalOrder };
             library[deckNameInRow].push(card);
             recordYokiIdMigrationReportCard(migrationReport, card, stats, migrated);
         });
@@ -2895,6 +2896,38 @@
             return isN ? num - 1000 : num;
         }
         return 999999;
+    }
+
+    function normalizeOriginalOrder(value) {
+        const normalized = String(value || '').trim();
+        return /^\d+-\d+$/.test(normalized) ? normalized : '';
+    }
+
+    function parseOriginalOrder(value) {
+        const match = String(value || '').trim().match(/^(\d+)-(\d+)$/);
+        if(!match) return { valid: false, deckNumber: Number.MAX_SAFE_INTEGER, itemNumber: Number.MAX_SAFE_INTEGER };
+        return { valid: true, deckNumber: Number(match[1]), itemNumber: Number(match[2]) };
+    }
+
+    function compareByLegacyNumberOrder(a, b) {
+        return extractNumber(a) - extractNumber(b);
+    }
+
+    function compareByOriginalOrder(a, b) {
+        const aa = parseOriginalOrder(a?.originalOrder || '');
+        const bb = parseOriginalOrder(b?.originalOrder || '');
+        if(aa.valid !== bb.valid) return aa.valid ? -1 : 1;
+        if(aa.valid && bb.valid) return aa.deckNumber - bb.deckNumber || aa.itemNumber - bb.itemNumber;
+        return 0;
+    }
+
+    function compareByNumberOrder(a, b) {
+        const originalOrderDiff = compareByOriginalOrder(a, b);
+        if(originalOrderDiff !== 0) return originalOrderDiff;
+        const aa = parseOriginalOrder(a?.originalOrder || '');
+        const bb = parseOriginalOrder(b?.originalOrder || '');
+        if(aa.valid && bb.valid) return 0;
+        return compareByLegacyNumberOrder(a, b);
     }
 
     function getValidReviewDurationSamples() {
@@ -3231,7 +3264,7 @@
                 const diff = getWrongRate(a) - getWrongRate(b);
                 if(diff !== 0) return diff;
             } else if(mode === 'number') {
-                const diff = extractNumber(a) - extractNumber(b);
+                const diff = compareByNumberOrder(a, b);
                 if(diff !== 0) return diff;
             } else if(mode === 'oldest') {
                 const aSeen = getLastSeen(a), bSeen = getLastSeen(b);
