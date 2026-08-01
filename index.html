@@ -475,14 +475,14 @@
     <div class="modal-overlay" id="fb-modal">
         <div class="modal-content">
             <div style="font-weight:bold; font-size:1.2rem; color:var(--text);">🔥 파이어베이스 백업 센터</div>
-            <div id="fb-auth-section">
+            <div id="fb-connection-section">
                 <div style="font-size:0.9rem; color:#aaa; margin-bottom:15px; line-height:1.5;">
                     <b>Firebase Realtime Database 연결</b><br>
                     현재 프로젝트는 기준 Yoki와 동일한 공개 REST 방식입니다. 백업은 Yople 전용 경로만 사용합니다.
                 </div>
                 <div style="margin-bottom: 15px;">
                     <span class="menu-label">연결 상태</span>
-                    <input type="text" id="gh-token-input" class="edit-input" value="Realtime Database · Yople 전용 경로" readonly>
+                    <input type="text" id="firebase-connection-status" class="edit-input" value="Realtime Database · Yople 전용 경로 · 로그인 없음" readonly>
                 </div>
                 <div class="modal-btns">
                     <button class="modal-btn btn-save" onclick="testFirebaseSync()">🚀 수동 백업 쏘기</button>
@@ -495,7 +495,7 @@
                 <h4 style="margin:10px 0; color:#fab005;">🕒 복구할 시간을 선택하세요 (최대 100개 보관)</h4>
                 <div id="fb-list-ui" class="backup-list">서버에서 내역을 불러오는 중...</div>
                 <div class="modal-btns">
-                    <button class="modal-btn btn-cancel" onclick="showAuthSection()">뒤로가기</button>
+                    <button class="modal-btn btn-cancel" onclick="showConnectionSection()">뒤로가기</button>
                 </div>
             </div>
         </div>
@@ -745,8 +745,7 @@
     const FIREBASE_CONNECTION = Object.freeze({
         service: 'Firebase Realtime Database REST',
         project: 'yokiapp-afcca',
-        authMode: 'none (baseline Yoki compatibility)',
-        uid: null
+        authMode: 'none (baseline Yoki compatibility)'
     });
 
     function normalizeFirebasePath(path) {
@@ -803,7 +802,6 @@
             localUpdatedAt: Number(data.localUpdatedAt) || 0
         };
     }
-    let ghRepoToken = '';
     let backupTimer = null;
     let isBackupInFlight = false;
     let isBooting = true;
@@ -811,7 +809,6 @@
     let isDataChanged = false;
 
     // Yople은 Yoki/Anki 키를 읽거나 마이그레이션하지 않는다.
-    ghRepoToken = localStorage.getItem('yople_gh_repo_token') || '';
 
     let targetRetention = parseFloat(getStorageItem(STORAGE_KEY_TARGET_RETENTION)) || 0.90;
 
@@ -1239,8 +1236,8 @@
         await flushBackupToFirebase(false);
     }
 
-    function openFirebaseSettings() { document.getElementById('gh-token-input').value = 'Realtime Database · Yople 전용 경로'; showAuthSection(); document.getElementById('fb-modal').style.display = 'flex'; }
-    function showAuthSection() { document.getElementById('fb-auth-section').style.display = 'block'; document.getElementById('fb-list-section').style.display = 'none'; }
+    function openFirebaseSettings() { document.getElementById('firebase-connection-status').value = 'Realtime Database · Yople 전용 경로 · 로그인 없음'; showConnectionSection(); document.getElementById('fb-modal').style.display = 'flex'; }
+    function showConnectionSection() { document.getElementById('fb-connection-section').style.display = 'block'; document.getElementById('fb-list-section').style.display = 'none'; }
     function updateCloudIcon(status) { const icon = document.getElementById('cloud-icon'); if(!icon) return; icon.className = `cloud-icon ${status}`; icon.innerText = status === 'active' ? '🔄' : (status === 'error' ? '❌' : '🔥'); }
     async function testFirebaseSync() { document.getElementById('fb-modal').style.display = 'none'; isDataChanged = true; await flushBackupToFirebase(false); }
     function scheduleBackup(reason = '') {
@@ -1566,7 +1563,7 @@
     }
 
     async function fetchFirebaseList() {
-        document.getElementById('fb-auth-section').style.display = 'none'; document.getElementById('fb-list-section').style.display = 'block';
+        document.getElementById('fb-connection-section').style.display = 'none'; document.getElementById('fb-list-section').style.display = 'block';
         const listUI = document.getElementById('fb-list-ui'); listUI.innerHTML = '<div style="padding:20px; text-align:center;">구글 서버에서 가져오는 중...</div>';
         try {
             const currentRecords = await fetchBackupRecordsFromPath(FIREBASE_BACKUP_PATH, 'Yople');
@@ -1653,7 +1650,7 @@
     }
 
     async function fetchFirebaseList() {
-        document.getElementById('fb-auth-section').style.display = 'none';
+        document.getElementById('fb-connection-section').style.display = 'none';
         document.getElementById('fb-list-section').style.display = 'block';
         const listUI = document.getElementById('fb-list-ui');
         listUI.innerHTML = '<div style="padding:20px; text-align:center;">구글 서버에서 가져오는 중...</div>';
@@ -1700,7 +1697,7 @@
     }
 
     function captureLocalRestoreSnapshot() {
-        return { stats: structuredClone(getStatsStore() || {}), storage: getBackupStorageSnapshot(), updatedAt: getLocalDataUpdatedAt() };
+        return { stats: structuredClone(getStatsStore() || {}), storage: getBackupStorageSnapshot(), updatedAt: getLocalDataUpdatedAt(), isDataChanged };
     }
 
     async function rollbackLocalRestoreSnapshot(snapshot) {
@@ -1710,6 +1707,7 @@
         Object.keys(getBackupStorageSnapshot()).forEach(key => removeStorageItem(key));
         Object.entries(snapshot.storage || {}).forEach(([key, value]) => setStorageItem(key, value));
         if(snapshot.updatedAt) setStorageItem(STORAGE_KEY_LOCAL_DATA_UPDATED_AT, String(snapshot.updatedAt));
+        isDataChanged = !!snapshot.isDataChanged;
     }
 
     async function restoreFromFirebase(ts, isAutoPull = false, backupPath = FIREBASE_BACKUP_PATH, options = {}) {
@@ -1754,6 +1752,7 @@
                 stats: countRestoreStats(getStatsStore()),
                 currentCardId: getCurrentCardId()
             });
+            isDataChanged = false;
             showToast("☁️ 복구 완료", "success");
             return true;
         } catch(e) { 
@@ -1829,7 +1828,8 @@
                     showToast('저장공간 초과: 학습데이터 저장은 건너뛰고 카드 표시를 계속합니다.', 'error');
                 }
             }
-            if(importResult.statsMigrated || importResult.mapChanged) isDataChanged = true;
+            // 로컬 카드 ID 맵 생성은 학습 데이터 변경이 아니므로 클라우드 백업을 예약하지 않는다.
+            if(importResult.statsMigrated) isDataChanged = true;
             logYokiIdMigrationReport(migrationReport);
             deckLoadReady = Object.values(library).some(cards => Array.isArray(cards) && cards.length > 0);
             fetchSuccess = true;

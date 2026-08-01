@@ -1,16 +1,34 @@
 {
-  "apps": {
-    "yople": {
-      ".read": "auth != null",
-      ".write": "auth != null",
-      "backups": {
-        "$backupId": {
-          ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'stats', 'statsCount', 'cardCount', 'metadata', 'integrity']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsCount').isNumber() && newData.child('statsCount').val() > 0 && newData.child('cardCount').isNumber() && newData.child('cardCount').val() > 0 && newData.child('integrity/algorithm').val() === 'SHA-256' && newData.child('integrity/checksum').isString()"
-        }
-      },
-      "backupIndex": {
-        "$backupId": {
-          ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'statsKeyCount', 'cardCount', 'checksum', 'metadata']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsKeyCount').isNumber() && newData.child('statsKeyCount').val() > 0 && newData.child('checksum').isString()"
+  "deployable": false,
+  "purpose": "Documentation only. Do not upload this file to Firebase Rules.",
+  "observedRuntimePolicy": {
+    "service": "Firebase Realtime Database REST",
+    "authentication": "none",
+    "allowedApplicationPaths": [
+      "/apps/yople/backups/{timestamp}",
+      "/apps/yople/backupIndex/{timestamp}"
+    ],
+    "clientPathGuard": "Only normalized paths equal to /apps/yople or beginning with /apps/yople/ are accepted. Backup operations further restrict access to the two paths above.",
+    "verifiedWithoutLogin": {
+      "read": true,
+      "write": true,
+      "delete": true
+    }
+  },
+  "referenceValidationFragmentNotForAutomaticDeployment": {
+    "apps": {
+      "yople": {
+        ".read": true,
+        ".write": true,
+        "backups": {
+          "$backupId": {
+            ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'stats', 'statsCount', 'cardCount', 'metadata', 'integrity']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsCount').isNumber() && newData.child('statsCount').val() > 0 && newData.child('cardCount').isNumber() && newData.child('cardCount').val() > 0 && newData.child('integrity/algorithm').val() === 'SHA-256' && newData.child('integrity/checksum').isString()"
+          }
+        },
+        "backupIndex": {
+          "$backupId": {
+            ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'statsKeyCount', 'cardCount', 'checksum', 'metadata']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsKeyCount').isNumber() && newData.child('statsKeyCount').val() > 0 && newData.child('checksum').isString()"
+          }
         }
       }
     }
