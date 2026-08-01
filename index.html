@@ -15,11 +15,13 @@
     body { font-family: 'Apple SD Gothic Neo', sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
     
     .header-container { background: var(--surface); border-bottom: 1px solid var(--border); z-index: 20; flex-shrink: 0; transition: all 0.3s ease; position: relative; }
-    .header { padding: 0 15px; padding-top: calc(env(safe-area-inset-top) + 15px); padding-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+    .header { padding: 0 15px; padding-top: calc(env(safe-area-inset-top) + 15px); padding-bottom: 15px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 10px; }
     .header-left { display: flex; gap: 15px; align-items: center; }
     
-    .header-center { display: flex; flex-direction: column; align-items: center; max-width: 50vw; }
-    .header-title { font-weight: bold; font-size: 1.1rem; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; padding: 4px 8px; border-radius: 8px; transition: background 0.2s; }
+    .header-center { display: flex; flex-direction: column; align-items: center; min-width: 0; width: 100%; }
+    .header-title { width: 100%; min-width: 0; font-weight: bold; font-size: 1.1rem; color: var(--text); overflow: visible; white-space: nowrap; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; padding: 4px 8px; border-radius: 8px; transition: background 0.2s; }
+    .deck-title-text-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: 1.25em; overflow: visible; }
+    #deck-title-text { position: absolute; left: 50%; top: 50%; display: inline-block; white-space: nowrap; line-height: 1.15; transform-origin: center center; transform: translate(-50%, -50%) scaleX(1); text-overflow: clip; }
     .header-title:active { background: rgba(255, 255, 255, 0.1); }
     
     .filter-status-text { font-size: 0.75rem; color: var(--primary); margin-top: 2px; opacity: 0.9; white-space: nowrap; font-weight: bold; }
@@ -260,7 +262,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.3 - 안전한 FSRS 재계산</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.4 - 반응형 덱 타이틀</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -309,7 +311,7 @@
             
             <div class="header-center">
                 <div class="header-title" id="deck-title" onclick="triggerManualBackup()">
-                    <span id="deck-title-text">Yople</span>
+                    <span class="deck-title-text-wrap" id="deck-title-text-wrap"><span id="deck-title-text">Yople</span></span>
                     <span id="cloud-icon" class="cloud-icon">🔥</span>
                 </div>
                 <div class="filter-status-text" id="filter-status-text">🔄 원래순 & 📋 전체</div>
@@ -513,7 +515,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.3 - 안전한 FSRS 재계산';
+    const APP_VERSION = 'Yople v11.19.4 - 반응형 덱 타이틀';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -1334,6 +1336,7 @@
     // 🔥 [수정됨] 새로고침 시 무조건 현재 기기의 로컬 데이터를 유지합니다. (자동 덮어씌우기 삭제)
     window.onload = async function() {
         try {
+            initializeHeaderTitleFitting();
             document.title = APP_VERSION;
             const versionLabel = document.getElementById('app-version-label');
             if(versionLabel) versionLabel.innerText = APP_VERSION;
@@ -3115,12 +3118,99 @@
     }
     function toggleFilterBar() { document.getElementById('filter-bar').classList.toggle('open'); }
 
+    const HEADER_TITLE_MAX_FONT_PX = 17.6;
+    const HEADER_TITLE_MIN_FONT_PX = 10;
+    let headerTitleResizeObserver = null;
+    let headerTitleFitFrame = 0;
+
+    function getDeckPathParts(deckPath) {
+        const value = String(deckPath || '').trim().replace(/__+$/, '');
+        if(!value) return [];
+        if(value.includes('__')) return value.split('__').map(part => part.trim()).filter(Boolean);
+        if(value.includes('::')) return value.split('::').map(part => part.trim()).filter(Boolean);
+        if(/\s>\s/.test(value)) return value.split(/\s*>\s*/).map(part => part.trim()).filter(Boolean);
+        if(value.includes('/')) return value.split('/').map(part => part.trim()).filter(Boolean);
+        return [value];
+    }
+
+    function getHeaderDeckTitle(deckPath, deckMode = 'deck') {
+        const parts = getDeckPathParts(deckPath);
+        if(!parts.length) return { display: APP_CONFIG.name, full: APP_CONFIG.name };
+        const full = parts.join(' > ');
+        let display;
+        if(parts.length === 1) display = parts[0];
+        else if(parts.length === 2) display = parts[1];
+        else display = `${parts[1]} > ${parts[parts.length - 1]}`;
+        if(deckMode === 'group') display += ' (전체)';
+        return { display, full: deckMode === 'group' ? `${full} (전체)` : full };
+    }
+
+    function fitHeaderTitle() {
+        const wrapper = document.getElementById('deck-title-text-wrap');
+        const text = document.getElementById('deck-title-text');
+        if(!wrapper || !text || wrapper.clientWidth <= 0) return;
+        text.style.transform = 'translate(-50%, -50%) scaleX(1)';
+        let low = HEADER_TITLE_MIN_FONT_PX;
+        let high = HEADER_TITLE_MAX_FONT_PX;
+        text.style.fontSize = `${high}px`;
+        if(text.scrollWidth > wrapper.clientWidth) {
+            for(let i = 0; i < 9; i++) {
+                const mid = (low + high) / 2;
+                text.style.fontSize = `${mid}px`;
+                if(text.scrollWidth <= wrapper.clientWidth) low = mid;
+                else high = mid;
+            }
+            text.style.fontSize = `${low}px`;
+        }
+        const renderedWidth = text.scrollWidth;
+        const horizontalScale = renderedWidth > wrapper.clientWidth
+            ? Math.max(0.35, wrapper.clientWidth / renderedWidth)
+            : 1;
+        text.style.transform = `translate(-50%, -50%) scaleX(${horizontalScale})`;
+        text.dataset.fitScale = String(horizontalScale);
+        text.dataset.fitFontSize = String(parseFloat(text.style.fontSize));
+    }
+
+    function scheduleHeaderTitleFit() {
+        if(headerTitleFitFrame) cancelAnimationFrame(headerTitleFitFrame);
+        headerTitleFitFrame = requestAnimationFrame(() => {
+            headerTitleFitFrame = 0;
+            fitHeaderTitle();
+        });
+    }
+
+    function setHeaderDeckTitle(deckPath, deckMode = 'deck') {
+        const title = getHeaderDeckTitle(deckPath, deckMode);
+        const titleElement = document.getElementById('deck-title');
+        const textElement = document.getElementById('deck-title-text');
+        if(textElement) textElement.textContent = title.display;
+        if(titleElement) {
+            titleElement.title = title.full;
+            titleElement.setAttribute('aria-label', title.full);
+        }
+        scheduleHeaderTitleFit();
+        return title;
+    }
+
+    function initializeHeaderTitleFitting() {
+        if(headerTitleResizeObserver) return;
+        const wrapper = document.getElementById('deck-title-text-wrap');
+        if(typeof ResizeObserver !== 'undefined' && wrapper) {
+            headerTitleResizeObserver = new ResizeObserver(scheduleHeaderTitleFit);
+            headerTitleResizeObserver.observe(wrapper);
+        }
+        window.addEventListener('resize', scheduleHeaderTitleFit, { passive: true });
+        window.addEventListener('orientationchange', scheduleHeaderTitleFit, { passive: true });
+        if(document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleHeaderTitleFit).catch(() => {});
+        scheduleHeaderTitleFit();
+    }
+
     function selectDeck(name, isRestore = false) { 
         todayEssentialState.active = false;
         currentDeckName = name; originalDeck = library[name] || []; setStorageItem(STORAGE_KEY_LAST_DECK, name);
         setStorageItem(STORAGE_KEY_LAST_DECK_MODE, 'deck');
         if(!isRestore) restoreDeckViewState(name);
-        document.getElementById('deck-title-text').innerText = name.split('__').pop();
+        setHeaderDeckTitle(name, 'deck');
         if(!isRestore && !getDeckViewStates()[name]) { 
             document.getElementById('search-input').value = '';
             setStorageItem(STORAGE_KEY_SEARCH_QUERY, '');
@@ -3136,7 +3226,7 @@
         currentDeckName = prefix.replace(/__$/, ''); originalDeck = merged; setStorageItem(STORAGE_KEY_LAST_DECK, currentDeckName);
         setStorageItem(STORAGE_KEY_LAST_DECK_MODE, 'group');
         if(!isRestore) restoreDeckViewState(currentDeckName);
-        document.getElementById('deck-title-text').innerText = currentDeckName.split('__').pop() + " (전체)";
+        setHeaderDeckTitle(currentDeckName, 'group');
         if(!isRestore && !getDeckViewStates()[currentDeckName]) { 
             document.getElementById('search-input').value = '';
             setStorageItem(STORAGE_KEY_SEARCH_QUERY, '');
@@ -4345,7 +4435,7 @@
         })));
 
         document.getElementById('search-input').value = viewState.searchQuery || '';
-        document.getElementById('deck-title-text').innerText = currentDeckName.split('__').pop() + (inferredMode === 'group' ? " (전체)" : "");
+        setHeaderDeckTitle(currentDeckName, inferredMode);
         updateFilterStatusUI();
         highlightFilter();
         renderDeckTree();
