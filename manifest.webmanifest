@@ -1,0 +1,19 @@
+{
+  "id": "./?app=yople",
+  "name": "Yople",
+  "short_name": "Yople",
+  "description": "Yople 카드 학습 앱",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "./yople-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
