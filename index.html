@@ -260,7 +260,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.2 - Firebase 안전 백업</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.3 - 안전한 FSRS 재계산</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -287,8 +287,8 @@
                 <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer;">
                     <input type="radio" name="tr-mode" value="recalc" style="margin-top:3px; transform: scale(1.2);">
                     <div>
-                        <b>⚪ 전면 재계산 (벼락치기용)</b><br>
-                        <span style="color:#fa5252; font-size:0.8rem;">과거 기록까지 역산하여, 지금 즉시 덱 전체의 스케줄을 갈아엎습니다.</span>
+                        <b>⚪ 전면 재계산</b><br>
+                        <span style="color:#ffd43b; font-size:0.8rem;">기존 학습 기록은 유지되고, 새 목표기억률에 맞게 향후 복습 일정만 다시 계산됩니다.</span>
                     </div>
                 </label>
             </div>
@@ -513,7 +513,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.2 - Firebase 안전 백업';
+    const APP_VERSION = 'Yople v11.19.3 - 안전한 FSRS 재계산';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -545,6 +545,7 @@
     let statsIndexedDbLoadFailed = false;
     let deckLoadReady = false;
     let restoreInProgress = false;
+    let isFullRecalculating = false;
     const YOKI_IDB_NAME = APP_CONFIG.indexedDbName;
     const YOKI_IDB_STORE = APP_CONFIG.indexedDbStore;
     const YOKI_IDB_STATS_KEY = 'stats';
@@ -1003,54 +1004,204 @@
         document.getElementById('current-tr-display').innerText = Math.round(targetRetention * 100);
     }
 
-    function saveTR() {
+    async function saveTR() {
         let val = parseInt(document.getElementById('tr-input').value, 10);
         let applyMode = document.querySelector('input[name="tr-mode"]:checked').value;
 
         if(val >= 70 && val <= 99) {
-            targetRetention = val / 100;
-            setStorageItem(STORAGE_KEY_TARGET_RETENTION, targetRetention);
-            updateTRButton();
-            
+            const nextRetention = val / 100;
             if (applyMode === 'recalc') {
-                const stats = JSON.parse(getStorageItem(STORAGE_KEY_STATS) || '{}');
-                let intervalFactor = Math.log(targetRetention) / Math.log(0.90);
-                let recalcCount = 0;
-                
-                for (let id in stats) {
-                    let cardStat = stats[id];
-                    if (cardStat.interval > 0 && (!cardStat.fsrs || cardStat.fsrs.S === 0)) {
-                        cardStat.fsrs = { D: 5.0, S: cardStat.interval, reps: 1 };
-                    }
-                    if (cardStat.fsrs && cardStat.fsrs.S > 0 && cardStat.interval > 0) {
-                        let S = cardStat.fsrs.S;
-                        let interval = Math.max(1, Math.round(S * intervalFactor));
-                        if (interval > 3) {
-                            let fuzz = 0;
-                            if (interval >= 4 && interval <= 7) fuzz = 1;
-                            else if (interval >= 8 && interval <= 15) fuzz = 2;
-                            else if (interval >= 16) fuzz = 3;
-                            const randomFuzz = Math.floor(Math.random() * (2 * fuzz + 1)) - fuzz;
-                            interval = Math.max(1, interval + randomFuzz);
-                        }
-                        cardStat.interval = interval;
-                        let baseDate = new Date(cardStat.lastDate || Date.now());
-                        baseDate.setHours(0,0,0,0);
-                        cardStat.dueDate = baseDate.getTime() + (interval * 86400000);
-                        recalcCount++;
-                    }
+                const result = await performSafeFullFsrsRecalculation(nextRetention);
+                if(!result.ok) {
+                    showToast(`전면 재계산 실패·롤백 완료: ${result.error}`, 'error');
+                    return;
                 }
-                setStorageItem(STORAGE_KEY_STATS, JSON.stringify(stats));
-                scheduleBackup();
-                showToast(`전면 재계산 완료! (${recalcCount}개 업데이트됨)`, "success");
-                applyFilterAndSort(false); 
+                const s = result.summary;
+                showToast(`Stats ${s.statsCount} · 재계산 ${s.recalculatedCount} · history 없음 ${s.noHistoryCount} · 기존 유지 ${s.preservedCount} · 실패 ${s.failedCount} · history ${s.historyCount} · 목표 ${Math.round(nextRetention * 100)}%`, 'success');
+                applyFilterAndSort(false);
             } else {
+                targetRetention = nextRetention;
+                setStorageItem(STORAGE_KEY_TARGET_RETENTION, targetRetention);
+                updateTRButton();
                 showToast("안전 모드로 기억률이 변경되었습니다.", "success");
             }
             document.getElementById('tr-modal').style.display = 'none';
         } else {
             alert("70에서 99 사이의 숫자를 입력해주세요.");
             document.getElementById('tr-input').value = Math.round(targetRetention * 100);
+        }
+    }
+
+    const FSRS_SCHEDULE_FIELDS = new Set([
+        'fsrs', 'dueDate', 'interval', 'stability', 'difficulty', 'retrievability',
+        'scheduledDays', 'elapsedDays', 'lastReview', 'nextReviewDate'
+    ]);
+
+    function getStatsPreservationSnapshot(stats, notes = getNotesByCardUuid()) {
+        const ids = Object.keys(stats || {}).sort();
+        const tagNames = ['fav', 'mem', 'cmp', 'num', 'date', 'pen'];
+        const tags = Object.fromEntries(tagNames.map(tag => [tag, 0]));
+        let historyCount = 0;
+        let correctTotal = 0;
+        let reviewTotal = 0;
+        const protectedStats = {};
+        ids.forEach(id => {
+            const stat = stats[id] && typeof stats[id] === 'object' ? stats[id] : {};
+            historyCount += Array.isArray(stat.history) ? stat.history.length : 0;
+            correctTotal += Number(stat.correct) || 0;
+            reviewTotal += Number(stat.total) || 0;
+            tagNames.forEach(tag => { if(stat[tag]) tags[tag]++; });
+            protectedStats[id] = Object.fromEntries(Object.entries(stat).filter(([key]) => !FSRS_SCHEDULE_FIELDS.has(key)));
+        });
+        return {
+            statsCount: ids.length,
+            ids,
+            historyCount,
+            correctTotal,
+            reviewTotal,
+            tags,
+            notesCount: Object.keys(notes || {}).length,
+            protectedDigest: stableStringify(protectedStats)
+        };
+    }
+
+    function assertStatsPreserved(before, after, stage = 'calculation') {
+        const fields = ['statsCount', 'historyCount', 'correctTotal', 'reviewTotal', 'notesCount', 'protectedDigest'];
+        for(const field of fields) {
+            if(before[field] !== after[field]) throw new Error(`RECALC_INTEGRITY_${stage}_${field}`);
+        }
+        if(stableStringify(before.ids) !== stableStringify(after.ids)) throw new Error(`RECALC_INTEGRITY_${stage}_UUID_SET`);
+        if(stableStringify(before.tags) !== stableStringify(after.tags)) throw new Error(`RECALC_INTEGRITY_${stage}_TAGS`);
+        return true;
+    }
+
+    function recalculateFsrsScheduleFromHistory(history, newTargetRetention) {
+        if(!Array.isArray(history) || !history.length) return null;
+        const events = history.map((item, index) => {
+            const time = Number(item && item.time);
+            const score = Number(item && item.score);
+            if(!Number.isFinite(time) || time <= 0) throw new Error(`INVALID_HISTORY_TIME index=${index}`);
+            if(!isConfirmHistoryItem(item) && ![0, 1, 2].includes(score)) throw new Error(`INVALID_HISTORY_SCORE index=${index}`);
+            return { item, time, score, index };
+        }).sort((a, b) => a.time - b.time || a.index - b.index);
+
+        const fsrs = { D: 5.0, S: 0, reps: 0 };
+        let latestReviewTime = 0;
+        for(const event of events) {
+            if(isConfirmHistoryItem(event.item)) continue;
+            fsrs.reps++;
+            if(fsrs.reps === 1) {
+                if(event.score === 0) { fsrs.D = 7.0; fsrs.S = 1.0; }
+                else if(event.score === 1) { fsrs.D = 6.0; fsrs.S = 2.0; }
+                else { fsrs.D = 5.0; fsrs.S = 3.0; }
+            } else {
+                if(event.score === 0) fsrs.D = Math.min(10, fsrs.D + 1.5);
+                else if(event.score === 1) fsrs.D = Math.min(10, fsrs.D + 0.5);
+                else fsrs.D = Math.max(1, fsrs.D - 0.5);
+                if(event.score === 0) fsrs.S = Math.max(1, fsrs.S * 0.2);
+                else fsrs.S *= event.score === 1 ? 1.2 : (1 + 0.5 * (11 - fsrs.D));
+            }
+            latestReviewTime = event.time;
+        }
+        if(!fsrs.reps || !latestReviewTime) return null;
+        const intervalFactor = Math.log(newTargetRetention) / Math.log(0.90);
+        if(!Number.isFinite(intervalFactor) || intervalFactor <= 0) throw new Error('INVALID_TARGET_RETENTION');
+        const interval = Math.max(1, Math.round(fsrs.S * intervalFactor));
+        const baseDate = new Date(latestReviewTime);
+        if(Number.isNaN(baseDate.getTime())) throw new Error('INVALID_LAST_REVIEW_DATE');
+        baseDate.setHours(0, 0, 0, 0);
+        return { fsrs, interval, dueDate: baseDate.getTime() + interval * 86400000 };
+    }
+
+    async function performSafeFullFsrsRecalculation(newTargetRetention) {
+        if(isFullRecalculating) return { ok: false, error: 'RECALC_ALREADY_RUNNING' };
+        const previousRetention = targetRetention;
+        const previousRetentionStorage = getStorageItem(STORAGE_KEY_TARGET_RETENTION);
+        const previousDirtyState = isDataChanged;
+        let memorySnapshot = null;
+        let indexedDbSnapshot = null;
+        isFullRecalculating = true;
+        if(backupTimer) { clearTimeout(backupTimer); backupTimer = null; }
+        try {
+            await statsPersistencePromise;
+            memorySnapshot = structuredClone(getStatsStore() || {});
+            indexedDbSnapshot = structuredClone(await readStatsFromIndexedDBForBackup());
+            if(stableStringify(memorySnapshot) !== stableStringify(indexedDbSnapshot)) throw new Error('RECALC_SOURCE_MEMORY_IDB_MISMATCH');
+            const notesSnapshot = structuredClone(getNotesByCardUuid());
+            const before = getStatsPreservationSnapshot(memorySnapshot, notesSnapshot);
+            const temporaryStats = {};
+            const failures = [];
+            let recalculatedCount = 0;
+            let noHistoryCount = 0;
+            let preservedCount = 0;
+
+            for(const id of before.ids) {
+                const previousStat = structuredClone(memorySnapshot[id]);
+                temporaryStats[id] = previousStat;
+                const history = previousStat && Array.isArray(previousStat.history) ? previousStat.history : [];
+                if(!history.length) {
+                    noHistoryCount++;
+                    preservedCount++;
+                    continue;
+                }
+                try {
+                    const schedule = recalculateFsrsScheduleFromHistory(history, newTargetRetention);
+                    if(!schedule) { preservedCount++; continue; }
+                    temporaryStats[id] = { ...previousStat, ...schedule };
+                    recalculatedCount++;
+                } catch(error) {
+                    failures.push({ id, error: error && error.message ? error.message : String(error) });
+                    preservedCount++;
+                }
+            }
+
+            const calculated = getStatsPreservationSnapshot(temporaryStats, getNotesByCardUuid());
+            assertStatsPreserved(before, calculated, 'CALCULATED');
+            inMemoryStatsStore = temporaryStats;
+            statsPersistencePromise = saveStatsToIndexedDBFallback(temporaryStats);
+            const saved = await statsPersistencePromise;
+            if(!saved) throw new Error('RECALC_INDEXEDDB_SAVE_FAILED');
+            const persistedStats = await readStatsFromIndexedDBForBackup();
+            const persisted = getStatsPreservationSnapshot(persistedStats, getNotesByCardUuid());
+            assertStatsPreserved(before, persisted, 'PERSISTED');
+            if(stableStringify(temporaryStats) !== stableStringify(persistedStats)) throw new Error('RECALC_PERSISTED_SCHEDULE_MISMATCH');
+
+            targetRetention = newTargetRetention;
+            setStorageItem(STORAGE_KEY_TARGET_RETENTION, String(newTargetRetention));
+            updateTRButton();
+            markLocalDataUpdated(Date.now());
+            isDataChanged = true;
+            const summary = {
+                statsCount: before.statsCount,
+                recalculatedCount,
+                noHistoryCount,
+                preservedCount,
+                failedCount: failures.length,
+                historyCount: before.historyCount,
+                correctTotal: before.correctTotal,
+                totalSum: before.reviewTotal,
+                targetRetention: newTargetRetention,
+                failures
+            };
+            console.log('[Yople Full FSRS Recalculation]', summary);
+            isFullRecalculating = false;
+            scheduleBackup('full-fsrs-recalculation');
+            return { ok: true, summary };
+        } catch(error) {
+            console.error('[Yople Full FSRS Recalculation Rollback]', error);
+            if(indexedDbSnapshot) {
+                inMemoryStatsStore = structuredClone(memorySnapshot || indexedDbSnapshot);
+                statsPersistencePromise = saveStatsToIndexedDBFallback(indexedDbSnapshot);
+                await statsPersistencePromise;
+            }
+            targetRetention = previousRetention;
+            if(previousRetentionStorage === null) removeStorageItem(STORAGE_KEY_TARGET_RETENTION);
+            else setStorageItem(STORAGE_KEY_TARGET_RETENTION, previousRetentionStorage);
+            updateTRButton();
+            isDataChanged = previousDirtyState;
+            return { ok: false, error: error && error.message ? error.message : String(error) };
+        } finally {
+            isFullRecalculating = false;
         }
     }
 
@@ -1241,7 +1392,7 @@
     function updateCloudIcon(status) { const icon = document.getElementById('cloud-icon'); if(!icon) return; icon.className = `cloud-icon ${status}`; icon.innerText = status === 'active' ? '🔄' : (status === 'error' ? '❌' : '🔥'); }
     async function testFirebaseSync() { document.getElementById('fb-modal').style.display = 'none'; isDataChanged = true; await flushBackupToFirebase(false); }
     function scheduleBackup(reason = '') {
-        if (restoreInProgress || isBooting) return;
+        if (restoreInProgress || isBooting || isFullRecalculating) return;
         isDataChanged = true;
         if (backupTimer) clearTimeout(backupTimer);
         backupTimer = setTimeout(() => {
@@ -1265,7 +1416,7 @@
             console.log('[Yople Test Mode] Firebase backup blocked before network');
             return false;
         }
-        if (!isDataChanged || isBackupInFlight) return false;
+        if (!isDataChanged || isBackupInFlight || isFullRecalculating) return false;
         if (backupTimer) {
             clearTimeout(backupTimer);
             backupTimer = null;
@@ -1391,6 +1542,7 @@
 
     async function performFirebaseBackup(isAuto, options = {}) {
         try {
+            if(isFullRecalculating) throw new Error('BACKUP_BLOCKED_FULL_RECALCULATION');
             if(restoreInProgress) throw new Error('BACKUP_BLOCKED_RESTORE_IN_PROGRESS');
             if(isBooting || !deckLoadReady) throw new Error('BACKUP_BLOCKED_DECK_NOT_READY');
             updateCloudIcon('active');
@@ -1484,7 +1636,7 @@
 
     // 🔥 [수정됨] 과거 내역 100개까지 출력
     function flushPendingBackupOnExit() {
-        if (!isDataChanged) return;
+        if (!isDataChanged || isFullRecalculating) return;
         flushBackupToFirebase(true, { keepalive: true });
     }
 
