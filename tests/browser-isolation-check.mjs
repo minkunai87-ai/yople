@@ -86,8 +86,16 @@ async function main() {
   if (initial.statsCount !== 0) throw new Error(`Expected 0 initial Stats, got ${initial.statsCount}`);
   if (!initial.localKeys.includes('yoki_final_stats')) throw new Error('Yoki sentinel unexpectedly deleted');
   await evaluate(`revealAnswer(); grade(2); new Promise(r=>setTimeout(r,700))`);
-  const afterGrade = await evaluate(`({count:Object.keys(getStatsStore()).length, stat:getStatsStore()[String(activeDeck[Math.max(0,currentIndex-1)]?.id||'')]||Object.values(getStatsStore())[0], yoki:localStorage.getItem('yoki_final_stats')})`);
+  const afterGrade = await evaluate(`(async()=>{
+    const stats=getStatsStore(); const backup=await buildVerifiedBackupData(getBackupMetadata(),await readStatsFromIndexedDBForBackup(),{testName:'offline-guard-test'});
+    const verified=await validateBackupData(backup,{allowSmaller:true});
+    const tampered=structuredClone(backup); tampered.stats[Object.keys(tampered.stats)[0]].total=999;
+    let tamperError=''; try{await validateBackupData(tampered,{allowSmaller:true})}catch(e){tamperError=e.message}
+    let pathError=''; try{assertYopleFirebasePath('/apps/yoki/backups')}catch(e){pathError=e.message}
+    return {count:Object.keys(stats).length,stat:stats[String(activeDeck[Math.max(0,currentIndex-1)]?.id||'')]||Object.values(stats)[0],yoki:localStorage.getItem('yoki_final_stats'),checksum:backup.integrity.checksum,verifiedCount:verified.statsCount,tamperError,pathError};
+  })()`);
   if (afterGrade.count !== 1 || !afterGrade.stat?.fsrs || afterGrade.stat?.history?.length !== 1) throw new Error('Grade did not persist Stats/FSRS/history');
+  if (afterGrade.verifiedCount !== 1 || afterGrade.tamperError !== 'INVALID_BACKUP_CHECKSUM' || !afterGrade.pathError.includes('BLOCKED_NON_YOPLE_FIREBASE_PATH')) throw new Error('Backup integrity/path guard failed');
   if (afterGrade.yoki !== initial.yokiStats) throw new Error('Yoki localStorage changed');
   await navigate(`${appUrl}?yopleTestMode=1`);
   for (let i = 0; i < 50; i++) {

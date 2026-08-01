@@ -198,6 +198,7 @@
     .backup-item:last-child { border-bottom: none; }
     .backup-item:hover { background: var(--btn-hover); }
     .backup-date { color: #fab005; font-weight: bold; }
+    .backup-delete-btn { margin-left: 10px; border: 0; border-radius: 7px; padding: 6px 9px; background: #c92a2a; color: white; cursor: pointer; }
     
     #toast { position: fixed; bottom: -100px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 12px 24px; border-radius: 25px; font-size: 0.95rem; font-weight: bold; transition: all 0.3s ease; z-index: 20000; box-shadow: 0 5px 15px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; }
     #toast.show { bottom: 85px; opacity: 1; } 
@@ -259,7 +260,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.1</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.2 - Firebase 안전 백업</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -476,16 +477,17 @@
             <div style="font-weight:bold; font-size:1.2rem; color:var(--text);">🔥 파이어베이스 백업 센터</div>
             <div id="fb-auth-section">
                 <div style="font-size:0.9rem; color:#aaa; margin-bottom:15px; line-height:1.5;">
-                    ✅ <b>모바일-PC 완벽 동기화 완료!</b><br>
-                    더 이상 데이터가 누락되지 않습니다. 앱을 켜면 자동으로 불러오고, 끄면 자동으로 저장됩니다.
+                    <b>Firebase Realtime Database 연결</b><br>
+                    현재 프로젝트는 기준 Yoki와 동일한 공개 REST 방식입니다. 백업은 Yople 전용 경로만 사용합니다.
                 </div>
                 <div style="margin-bottom: 15px;">
-                    <span class="menu-label">🔒 비공개 문제 가져오기 (GitHub Token)</span>
-                    <input type="text" id="gh-token-input" class="edit-input" placeholder="ghp_... (비공개 덱이 아니면 비워두세요)">
+                    <span class="menu-label">연결 상태</span>
+                    <input type="text" id="gh-token-input" class="edit-input" value="Realtime Database · Yople 전용 경로" readonly>
                 </div>
                 <div class="modal-btns">
                     <button class="modal-btn btn-save" onclick="testFirebaseSync()">🚀 수동 백업 쏘기</button>
                     <button class="modal-btn btn-sub" style="margin-top:0; width:auto;" onclick="fetchFirebaseList()">🕒 과거 내역 보기</button>
+                    <button class="modal-btn btn-sub" style="margin-top:0; width:auto;" onclick="restoreLatestSafeFirebaseBackup()">☁️ 최신 정상 백업 복구</button>
                     <button class="modal-btn btn-cancel" onclick="document.getElementById('fb-modal').style.display='none'">닫기</button>
                 </div>
             </div>
@@ -511,7 +513,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.1';
+    const APP_VERSION = 'Yople v11.19.2 - Firebase 안전 백업';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -538,6 +540,11 @@
     let lastRecoveryPollutionDiagnostics = {};
     let pendingStartupViewState = null;
     let inMemoryStatsStore = null;
+    let statsPersistencePromise = Promise.resolve(true);
+    let statsIndexedDbReady = false;
+    let statsIndexedDbLoadFailed = false;
+    let deckLoadReady = false;
+    let restoreInProgress = false;
     const YOKI_IDB_NAME = APP_CONFIG.indexedDbName;
     const YOKI_IDB_STORE = APP_CONFIG.indexedDbStore;
     const YOKI_IDB_STATS_KEY = 'stats';
@@ -565,9 +572,13 @@
     const STORAGE_KEY_MIGRATION_DONE = 'yople_storage_migration_v1_done';
     const STORAGE_KEY_LOCAL_DATA_UPDATED_AT = 'yople_local_data_updated_at';
     const STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT = 'yople_last_auto_cloud_sync_at';
+    const STORAGE_KEY_LAST_BACKUP_CHECKSUM = 'yople_last_backup_checksum';
+    const STORAGE_KEY_LAST_BACKUP_AT = 'yople_last_backup_at';
     const FIREBASE_BACKUP_PATH = `${APP_CONFIG.firebaseRoot}/backups`;
     const FIREBASE_BACKUP_INDEX_PATH = `${APP_CONFIG.firebaseRoot}/backupIndex`;
     const FIREBASE_BACKUP_KEEP_COUNT = 20;
+    const BACKUP_SCHEMA_VERSION = 2;
+    const AUTO_BACKUP_MIN_INTERVAL_MS = 15000;
     const LEGACY_STORAGE_KEYS = {};
 
     function isEmptyStorageValue(value) {
@@ -606,7 +617,7 @@
                 const parsedStats = parseJSONSafe(value, {});
                 if(parsedStats && typeof parsedStats === 'object') {
                     inMemoryStatsStore = parsedStats;
-                    saveStatsToIndexedDBFallback(parsedStats);
+                    statsPersistencePromise = saveStatsToIndexedDBFallback(parsedStats);
                 }
                 removeStorageItem(STORAGE_KEY_STATS);
                 console.warn('LOCAL_STATS_STORAGE_SKIPPED', { key, count: Object.keys(parsedStats || {}).length });
@@ -622,7 +633,7 @@
                     const parsedStats = parseJSONSafe(value, {});
                     if(parsedStats && typeof parsedStats === 'object') {
                         inMemoryStatsStore = parsedStats;
-                        saveStatsToIndexedDBFallback(parsedStats);
+                        statsPersistencePromise = saveStatsToIndexedDBFallback(parsedStats);
                     }
                     removeStorageItem(STORAGE_KEY_STATS);
                     return false;
@@ -729,6 +740,67 @@
                 }
             }
             return nativeFetch(input, init);
+        };
+    }
+    const FIREBASE_CONNECTION = Object.freeze({
+        service: 'Firebase Realtime Database REST',
+        project: 'yokiapp-afcca',
+        authMode: 'none (baseline Yoki compatibility)',
+        uid: null
+    });
+
+    function normalizeFirebasePath(path) {
+        let value = String(path || '').trim();
+        if(value.startsWith(FIREBASE_DB_URL)) value = new URL(value).pathname;
+        value = decodeURIComponent(value.split('?')[0]).replace(/\.json$/i, '');
+        value = '/' + value.replace(/^\/+|\/+$/g, '').replace(/\/{2,}/g, '/');
+        if(value.split('/').some(segment => segment === '.' || segment === '..')) throw new Error('BLOCKED_INVALID_FIREBASE_PATH');
+        return value === '/' ? '/' : value;
+    }
+
+    function assertYopleFirebasePath(path) {
+        const normalized = normalizeFirebasePath(path);
+        if(normalized !== APP_CONFIG.firebaseRoot && !normalized.startsWith(`${APP_CONFIG.firebaseRoot}/`)) {
+            throw new Error(`BLOCKED_NON_YOPLE_FIREBASE_PATH ${normalized}`);
+        }
+        return normalized;
+    }
+
+    async function firebaseRequest(path, init = {}) {
+        const normalized = assertYopleFirebasePath(path);
+        const method = String(init.method || 'GET').toUpperCase();
+        const query = init.query ? `?${new URLSearchParams(init.query)}` : '';
+        console.log('YOPLE_FIREBASE_REQUEST', { method, path: normalized });
+        const options = { ...init };
+        delete options.query;
+        return fetch(`${FIREBASE_DB_URL}${normalized}.json${query}`, options);
+    }
+
+    function stableStringify(value) {
+        if(value === null || typeof value !== 'object') return JSON.stringify(value);
+        if(Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+    }
+
+    async function sha256Hex(value) {
+        if(!crypto || !crypto.subtle) throw new Error('CHECKSUM_UNAVAILABLE');
+        const bytes = new TextEncoder().encode(typeof value === 'string' ? value : stableStringify(value));
+        const hash = await crypto.subtle.digest('SHA-256', bytes);
+        return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    function getBackupIntegrityPayload(data = {}) {
+        return {
+            schemaVersion: Number(data.schemaVersion),
+            appId: String(data.appId || ''),
+            appVersion: String(data.appVersion || ''),
+            timestamp: Number(data.timestamp),
+            stats: getBackupStatsCandidate(data),
+            statsCount: Number(data.statsCount),
+            cardCount: Number(data.cardCount),
+            metadata: data.metadata || {},
+            currentCardUuid: String(data.currentCardUuid || ''),
+            localUpdatedAt: Number(data.localUpdatedAt) || 0
         };
     }
     let ghRepoToken = '';
@@ -1167,12 +1239,12 @@
         await flushBackupToFirebase(false);
     }
 
-    function openFirebaseSettings() { document.getElementById('gh-token-input').value = ghRepoToken; showAuthSection(); document.getElementById('fb-modal').style.display = 'flex'; }
+    function openFirebaseSettings() { document.getElementById('gh-token-input').value = 'Realtime Database · Yople 전용 경로'; showAuthSection(); document.getElementById('fb-modal').style.display = 'flex'; }
     function showAuthSection() { document.getElementById('fb-auth-section').style.display = 'block'; document.getElementById('fb-list-section').style.display = 'none'; }
     function updateCloudIcon(status) { const icon = document.getElementById('cloud-icon'); if(!icon) return; icon.className = `cloud-icon ${status}`; icon.innerText = status === 'active' ? '🔄' : (status === 'error' ? '❌' : '🔥'); }
-    async function testFirebaseSync() { document.getElementById('fb-modal').style.display = 'none'; ghRepoToken = document.getElementById('gh-token-input').value.trim(); localStorage.setItem('yople_gh_repo_token', ghRepoToken); isDataChanged = true; await flushBackupToFirebase(false); }
+    async function testFirebaseSync() { document.getElementById('fb-modal').style.display = 'none'; isDataChanged = true; await flushBackupToFirebase(false); }
     function scheduleBackup(reason = '') {
-        if (reason !== 'review') return;
+        if (restoreInProgress || isBooting) return;
         isDataChanged = true;
         if (backupTimer) clearTimeout(backupTimer);
         backupTimer = setTimeout(() => {
@@ -1218,59 +1290,137 @@
         return { allowed: !isEmptySnapshot && !isRapidDrop, isEmptySnapshot, isRapidDrop, current, largest };
     }
 
+    function getLibraryCardIds() {
+        return new Set(Object.values(library || {}).flatMap(cards => Array.isArray(cards) ? cards.map(card => String(card && card.id || '')).filter(Boolean) : []));
+    }
+
+    function validateStatsCardIds(stats) {
+        const libraryIds = getLibraryCardIds();
+        const invalid = Object.keys(stats || {}).filter(id => !libraryIds.has(String(id)));
+        return { valid: invalid.length === 0, invalid: invalid.slice(0, 20), libraryCardCount: libraryIds.size };
+    }
+
+    function getSerializableTodayEssentialState() {
+        return {
+            active: !!todayEssentialState.active,
+            selectedCount: Number(todayEssentialState.selectedCount) || 0,
+            selectedIds: Array.isArray(todayEssentialState.selectedIds) ? todayEssentialState.selectedIds.map(String) : [],
+            processedIds: [...(todayEssentialState.processedIds || [])].map(String),
+            previousCardId: String(todayEssentialState.previousCardId || ''),
+            entryFilterMode: todayEssentialState.entryFilterMode || 'default',
+            entrySortMode: todayEssentialState.entrySortMode || 'original',
+            entrySecondarySortMode: todayEssentialState.entrySecondarySortMode || 'none',
+            entryCardIndex: Number(todayEssentialState.entryCardIndex) || 0
+        };
+    }
+
+    function getBackupStorageSnapshot() {
+        const keys = [
+            STORAGE_KEY_PROGRESS, STORAGE_KEY_LAST_DECK, STORAGE_KEY_LAST_DECK_MODE,
+            STORAGE_KEY_FILTER_STATE, STORAGE_KEY_CURRENT_CARD_ID, STORAGE_KEY_VIEW_STATE,
+            STORAGE_KEY_LOCAL_EDITS, STORAGE_KEY_RECENT_DECKS, STORAGE_KEY_DECK_VIEW_STATES,
+            STORAGE_KEY_SEARCH_QUERY, STORAGE_KEY_TARGET_RETENTION, STORAGE_KEY_NOTES,
+            STORAGE_KEY_REVIEW_HISTORY, REVIEW_DURATION_STORAGE_KEY
+        ];
+        return Object.fromEntries(keys.map(key => [key, getStorageItem(key)]).filter(([, value]) => value !== null));
+    }
+
+    async function buildVerifiedBackupData(metadata, backupStats, options = {}) {
+        const statsCount = Object.keys(backupStats || {}).length;
+        const cardValidation = validateStatsCardIds(backupStats);
+        if(!deckLoadReady || !cardValidation.libraryCardCount) throw new Error('BACKUP_BLOCKED_DECK_NOT_READY');
+        if(!statsIndexedDbReady || statsIndexedDbLoadFailed) throw new Error('BACKUP_BLOCKED_INDEXEDDB_NOT_READY');
+        if(!statsCount) throw new Error('BACKUP_BLOCKED_EMPTY_STATS');
+        if(!cardValidation.valid) throw new Error(`BACKUP_BLOCKED_INVALID_CARD_IDS ${cardValidation.invalid.join(',')}`);
+        const viewState = compactStudyViewState(getCurrentViewState(false));
+        const data = {
+            schemaVersion: BACKUP_SCHEMA_VERSION,
+            appId: APP_CONFIG.id,
+            appVersion: APP_VERSION,
+            timestamp: metadata.backupAt,
+            backupType: options.testName ? 'integration-test' : 'user',
+            testName: options.testName || '',
+            stats: backupStats,
+            reviewHistory: parseJSONSafe(getStorageItem(STORAGE_KEY_REVIEW_HISTORY), {}),
+            notesByCardUuid: getNotesByCardUuid(),
+            storage: getBackupStorageSnapshot(),
+            progress: getStorageItem(STORAGE_KEY_PROGRESS) || '{}',
+            filter: getStorageItem(STORAGE_KEY_FILTER_STATE) || '{}',
+            targetRetention: getStorageItem(STORAGE_KEY_TARGET_RETENTION) || '0.90',
+            localEdits: getStorageItem(STORAGE_KEY_LOCAL_EDITS) || '{}',
+            cardIdMap: getStorageItem(STORAGE_KEY_CARD_ID_MAP) || '{}',
+            searchQuery: getStorageItem(STORAGE_KEY_SEARCH_QUERY) || '',
+            viewState,
+            todayEssential: getSerializableTodayEssentialState(),
+            recentDecks: parseJSONSafe(getStorageItem(STORAGE_KEY_RECENT_DECKS), []),
+            selectedDeckName: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
+            selectedDeckPath: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
+            selectedDeckType: getStorageItem(STORAGE_KEY_LAST_DECK_MODE) || 'deck',
+            viewMode: (getStorageItem(STORAGE_KEY_LAST_DECK_MODE) || 'deck') === 'group' ? 'parentDeckView' : 'subDeckView',
+            currentDeckName: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
+            currentCardUuid: getCurrentCardId(),
+            currentCardIndex: Number.isFinite(Number(currentIndex)) ? currentIndex : 0,
+            currentCardIndexInSelectedDeck: Number.isFinite(Number(currentIndex)) ? currentIndex : 0,
+            currentSortMode,
+            currentSecondarySortMode,
+            currentFilterMode,
+            lastViewedAt: Date.now(),
+            localUpdatedAt: getLocalDataUpdatedAt(),
+            cardCount: cardValidation.libraryCardCount,
+            statsCount,
+            metadata: { ...metadata, localUpdatedAt: getLocalDataUpdatedAt(), cardCount: cardValidation.libraryCardCount, statsCount }
+        };
+        const canonicalData = JSON.parse(JSON.stringify(data));
+        const checksum = await sha256Hex(getBackupIntegrityPayload(canonicalData));
+        return { ...canonicalData, integrity: { algorithm: 'SHA-256', checksum, schemaVersion: BACKUP_SCHEMA_VERSION } };
+    }
+
+    async function validateBackupData(data, options = {}) {
+        if(!data || typeof data !== 'object') throw new Error('INVALID_BACKUP_EMPTY');
+        if(data.appId !== APP_CONFIG.id) throw new Error('INVALID_BACKUP_APP_ID');
+        if(Number(data.schemaVersion) !== BACKUP_SCHEMA_VERSION) throw new Error('INVALID_BACKUP_SCHEMA');
+        if(!data.integrity || data.integrity.algorithm !== 'SHA-256' || !data.integrity.checksum) throw new Error('INVALID_BACKUP_INTEGRITY_MISSING');
+        const checksum = await sha256Hex(getBackupIntegrityPayload(data));
+        if(checksum !== data.integrity.checksum) throw new Error('INVALID_BACKUP_CHECKSUM');
+        const stats = getBackupStatsCandidate(data);
+        const statsCount = Object.keys(stats || {}).length;
+        if(!statsCount || statsCount !== Number(data.statsCount)) throw new Error('INVALID_BACKUP_STATS_COUNT');
+        const cardValidation = validateStatsCardIds(stats);
+        if(!cardValidation.valid) throw new Error(`INVALID_BACKUP_CARD_IDS ${cardValidation.invalid.join(',')}`);
+        const localCount = Object.keys(getStatsStore() || {}).length;
+        if(!options.allowSmaller && localCount >= 100 && statsCount < localCount * 0.5 && localCount - statsCount >= 100) throw new Error('RESTORE_BLOCKED_RAPID_STATS_DROP');
+        return { stats, statsCount, checksum };
+    }
+
     async function performFirebaseBackup(isAuto, options = {}) {
         try {
+            if(restoreInProgress) throw new Error('BACKUP_BLOCKED_RESTORE_IN_PROGRESS');
+            if(isBooting || !deckLoadReady) throw new Error('BACKUP_BLOCKED_DECK_NOT_READY');
             updateCloudIcon('active');
             persistCurrentViewState(false);
             const metadata = getBackupMetadata();
-            const backupStats = getStatsStore();
+            const backupStats = await readStatsFromIndexedDBForBackup();
+            const memoryStatsCount = Object.keys(getStatsStore() || {}).length;
             const backupStatsCount = Object.keys(backupStats || {}).length;
+            if(memoryStatsCount !== backupStatsCount) throw new Error(`BACKUP_BLOCKED_INDEXEDDB_COUNT_MISMATCH memory=${memoryStatsCount} idb=${backupStatsCount}`);
             let largestCloudStatsCount = 0;
-            try {
-                const guardRes = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}.json?_t=${Date.now()}`, { cache: 'no-store' });
-                if (guardRes.ok) {
-                    const guardIndex = await guardRes.json();
-                    largestCloudStatsCount = Math.max(0, ...Object.values(guardIndex || {}).map(item => Number(item && item.statsKeyCount) || 0));
-                }
-            } catch (guardError) {
-                console.warn('[Yople Backup Safety Guard Lookup Failed]', guardError);
-            }
+            const guardRes = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { _t: Date.now() } });
+            if(!guardRes.ok) throw new Error(`BACKUP_GUARD_INDEX_READ_FAILED ${guardRes.status}`);
+            const guardIndex = await guardRes.json();
+            largestCloudStatsCount = Math.max(0, ...Object.values(guardIndex || {}).map(item => Number(item && item.statsKeyCount) || 0));
             const backupSafety = evaluateBackupStatsSafety(backupStatsCount, largestCloudStatsCount);
             if (!backupSafety.allowed) {
-                console.error('[Yople Backup Safety Guard Blocked]', { backupStatsCount, largestCloudStatsCount });
-                updateCloudIcon('error');
-                if (!isAuto) showToast('⚠️ 카드 수 급감이 감지되어 백업을 차단했습니다.', 'error');
-                return false;
+                throw new Error(backupSafety.isEmptySnapshot ? 'BACKUP_BLOCKED_EMPTY_STATS' : 'BACKUP_BLOCKED_RAPID_STATS_DROP');
             }
-            const currentCardUuid = getCurrentCardId();
-            const data = { 
-                appId: APP_CONFIG.id,
-                appVersion: APP_VERSION,
-                stats: JSON.stringify(backupStats || {}),
-                progress: getStorageItem(STORAGE_KEY_PROGRESS) || '{}', 
-                filter: getStorageItem(STORAGE_KEY_FILTER_STATE) || '{}',
-                targetRetention: getStorageItem(STORAGE_KEY_TARGET_RETENTION) || '0.90', 
-                localEdits: getStorageItem(STORAGE_KEY_LOCAL_EDITS) || '{}',
-                notesByCardUuid: getStorageItem(STORAGE_KEY_NOTES) || '{}',
-                cardIdMap: getStorageItem(STORAGE_KEY_CARD_ID_MAP) || '{}',
-                searchQuery: getStorageItem(STORAGE_KEY_SEARCH_QUERY) || '',
-                timestamp: metadata.backupAt,
-                selectedDeckName: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
-                selectedDeckPath: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
-                selectedDeckType: getStorageItem(STORAGE_KEY_LAST_DECK_MODE) || 'deck',
-                viewMode: (getStorageItem(STORAGE_KEY_LAST_DECK_MODE) || 'deck') === 'group' ? 'parentDeckView' : 'subDeckView',
-                currentDeckName: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
-                currentCardUuid,
-                currentCardIndex: Number.isFinite(Number(currentIndex)) ? currentIndex : 0,
-                currentCardIndexInSelectedDeck: Number.isFinite(Number(currentIndex)) ? currentIndex : 0,
-                currentSortMode,
-                currentFilterMode,
-                lastViewedAt: Date.now(),
-                localUpdatedAt: getLocalDataUpdatedAt(),
-                metadata: { ...metadata, localUpdatedAt: getLocalDataUpdatedAt() }
-            };
+            const data = await buildVerifiedBackupData(metadata, backupStats, options);
             const payloadText = JSON.stringify(data);
+            JSON.parse(payloadText);
             const payloadSizeKB = Math.round(payloadText.length / 1024);
+            if(!payloadText.length || payloadSizeKB > 50000) throw new Error(`BACKUP_BLOCKED_INVALID_SIZE ${payloadSizeKB}KB`);
+            const lastChecksum = getStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM) || '';
+            const lastBackupAt = Number(getStorageItem(STORAGE_KEY_LAST_BACKUP_AT)) || 0;
+            if(isAuto && data.integrity.checksum === lastChecksum) return false;
+            if(isAuto && Date.now() - lastBackupAt < AUTO_BACKUP_MIN_INTERVAL_MS) return false;
             const payloadBreakdownKB = {
                 totalKB: payloadSizeKB,
                 statsKB: Math.round(JSON.stringify(data.stats || '').length / 1024),
@@ -1283,7 +1433,12 @@
                 appId: APP_CONFIG.id,
                 appVersion: APP_VERSION,
                 metadata,
-                statsKeyCount: Object.keys(backupStats || {}).length,
+                schemaVersion: BACKUP_SCHEMA_VERSION,
+                statsKeyCount: backupStatsCount,
+                cardCount: data.cardCount,
+                checksum: data.integrity.checksum,
+                backupType: data.backupType,
+                testName: data.testName,
                 localUpdatedAt: data.localUpdatedAt,
                 createdAt: Date.now()
             };
@@ -1295,23 +1450,27 @@
                 payloadBreakdownKB
             });
             console.log('BACKUP_WRITE_PATH', `${FIREBASE_BACKUP_PATH}/${data.timestamp}`);
-            const res = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_PATH}/${data.timestamp}.json`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payloadText, keepalive: !!options.keepalive });
+            const backupRecordPath = `${FIREBASE_BACKUP_PATH}/${data.timestamp}`;
+            const backupIndexPath = `${FIREBASE_BACKUP_INDEX_PATH}/${data.timestamp}`;
+            const res = await firebaseRequest(backupRecordPath, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payloadText, keepalive: !!options.keepalive });
             if(res.ok) { 
-                try {
-                    const indexRes = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}/${data.timestamp}.json`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(backupIndexData),
-                        keepalive: !!options.keepalive
-                    });
-                    console.log('BACKUP_INDEX_WRITE_SUCCESS', indexRes.ok);
-                } catch(indexError) {
-                    console.error('[Yople Backup Index Error]', indexError);
+                const indexRes = await firebaseRequest(backupIndexPath, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(backupIndexData), keepalive: !!options.keepalive
+                });
+                if(!indexRes.ok) {
+                    await firebaseRequest(backupRecordPath, { method: 'DELETE' }).catch(() => null);
+                    throw new Error(`BACKUP_INDEX_WRITE_FAILED ${indexRes.status}`);
                 }
+                console.log('BACKUP_INDEX_WRITE_SUCCESS', true);
                 console.log('BACKUP_WRITE_SUCCESS', true);
                 isDataChanged = false; 
-                setStorageItem(STORAGE_KEY_LAST_SYNC_TIME, data.timestamp.toString()); 
-                updateCloudIcon('done'); if(!options.keepalive) cleanupOldBackups(); 
+                setStorageItem(STORAGE_KEY_LAST_SYNC_TIME, data.timestamp.toString());
+                setStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM, data.integrity.checksum);
+                setStorageItem(STORAGE_KEY_LAST_BACKUP_AT, String(Date.now()));
+                window.__YOPLE_LAST_BACKUP_RESULT__ = { timestamp: data.timestamp, path: backupRecordPath, checksum: data.integrity.checksum, testName: data.testName };
+                updateCloudIcon('done');
+                if(!options.keepalive && !options.skipCleanup) cleanupOldBackups();
                 if(!isAuto) showToast("🚀 수동 백업 100% 성공!", "success"); 
                 return true; 
             } 
@@ -1366,7 +1525,7 @@
 
     async function fetchBackupRecordsFromPath(path, label) {
         try {
-            const res = await fetch(`${FIREBASE_DB_URL}${path}.json?shallow=true&_t=${Date.now()}`);
+            const res = await firebaseRequest(path, { query: { shallow: 'true', _t: Date.now() } });
             if(!res.ok) return [];
             const data = await res.json();
             if(!data || typeof data !== 'object') return [];
@@ -1385,11 +1544,11 @@
     async function fetchBackupSummaryFromPath(path, label, ts) {
         try {
             const fields = await Promise.all([
-                fetch(`${FIREBASE_DB_URL}${path}/${ts}/appId.json?_t=${Date.now()}`).then(r => r.ok ? r.json() : null).catch(() => null),
-                fetch(`${FIREBASE_DB_URL}${path}/${ts}/appVersion.json?_t=${Date.now()}`).then(r => r.ok ? r.json() : null).catch(() => null),
-                fetch(`${FIREBASE_DB_URL}${path}/${ts}/version.json?_t=${Date.now()}`).then(r => r.ok ? r.json() : null).catch(() => null),
-                fetch(`${FIREBASE_DB_URL}${path}/${ts}/title.json?_t=${Date.now()}`).then(r => r.ok ? r.json() : null).catch(() => null),
-                fetch(`${FIREBASE_DB_URL}${path}/${ts}/metadata.json?_t=${Date.now()}`).then(r => r.ok ? r.json() : null).catch(() => null)
+                firebaseRequest(`${path}/${ts}/appId`, { query: { _t: Date.now() } }).then(r => r.ok ? r.json() : null).catch(() => null),
+                firebaseRequest(`${path}/${ts}/appVersion`, { query: { _t: Date.now() } }).then(r => r.ok ? r.json() : null).catch(() => null),
+                firebaseRequest(`${path}/${ts}/version`, { query: { _t: Date.now() } }).then(r => r.ok ? r.json() : null).catch(() => null),
+                firebaseRequest(`${path}/${ts}/title`, { query: { _t: Date.now() } }).then(r => r.ok ? r.json() : null).catch(() => null),
+                firebaseRequest(`${path}/${ts}/metadata`, { query: { _t: Date.now() } }).then(r => r.ok ? r.json() : null).catch(() => null)
             ]);
             const data = {
                 appId: fields[0],
@@ -1425,8 +1584,9 @@
                 const ts = record.ts;
                 const item = document.createElement('div'); item.className = 'backup-item'; const d = new Date(parseInt(ts));
                 const timeStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-                item.innerHTML = `<span><span class="backup-date">🕒 ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}]</small></span>`;
+                item.innerHTML = `<span><span class="backup-date">🕒 ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}]</small></span><button class="backup-delete-btn" type="button">삭제</button>`;
                 item.onclick = async () => { listUI.innerHTML = '<div style="padding:20px; text-align:center;">데이터를 복구 중입니다... 1초 대기!</div>'; await restoreFromFirebase(ts, false, record.path); };
+                item.querySelector('.backup-delete-btn').onclick = event => { event.stopPropagation(); deleteFirebaseBackup(ts, record.path); };
                 listUI.appendChild(item);
                 item.querySelector('span').insertAdjacentHTML('beforeend', `<br><small class="backup-device" data-backup-key="${record.path}:${ts}" style="color:var(--text-sub);">device loading...</small>`);
             });
@@ -1454,7 +1614,7 @@
     async function fetchBackupRecordsFromIndexFast() {
         try {
             logYokiStorageEnvironment('fetchFirebaseList:index');
-            const res = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}.json?orderBy=%22$key%22&limitToLast=${FIREBASE_BACKUP_KEEP_COUNT}&_t=${Date.now()}`, { cache: 'no-store' });
+            const res = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { orderBy: '"$key"', limitToLast: FIREBASE_BACKUP_KEEP_COUNT, _t: Date.now() } });
             if(!res.ok) return [];
             const data = await res.json();
             if(!data || typeof data !== 'object') return [];
@@ -1471,7 +1631,7 @@
 
     async function fetchBackupRecordsFromShallowPath(path, label) {
         try {
-            const res = await fetch(`${FIREBASE_DB_URL}${path}.json?shallow=true&_t=${Date.now()}`, { cache: 'no-store' });
+            const res = await firebaseRequest(path, { cache: 'no-store', query: { shallow: 'true', _t: Date.now() } });
             if(!res.ok) return [];
             const data = await res.json();
             if(!data || typeof data !== 'object') return [];
@@ -1525,11 +1685,12 @@
                     ? `${metadata.deviceName} · ${metadata.platform || 'Unknown'} · ${metadata.version || record.data.appVersion || ''}`
                     : (record.source === 'shallow' ? '정보 없음 · 클릭 시 검증' : `${record.data.appVersion || 'device unknown'}`);
                 const countText = record.data && record.data.statsKeyCount ? ` · stats ${record.data.statsKeyCount}` : '';
-                item.innerHTML = `<span><span class="backup-date">☁️ ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}${record.source === 'shallow' ? ' shallow' : ''}]</small><br><small style="color:var(--text-sub);">${detailText}${countText}</small></span>`;
+                item.innerHTML = `<span><span class="backup-date">☁️ ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}${record.source === 'shallow' ? ' shallow' : ''}]</small><br><small style="color:var(--text-sub);">${detailText}${countText}</small></span><button class="backup-delete-btn" type="button">삭제</button>`;
                 item.onclick = async () => {
                     listUI.innerHTML = '<div style="padding:20px; text-align:center;">해당 백업 다운로드 중...</div>';
                     await restoreFromFirebase(ts, false, record.path);
                 };
+                item.querySelector('.backup-delete-btn').onclick = event => { event.stopPropagation(); deleteFirebaseBackup(ts, record.path); };
                 listUI.appendChild(item);
             });
         } catch(e) {
@@ -1538,17 +1699,39 @@
         }
     }
 
-    async function restoreFromFirebase(ts, isAutoPull = false, backupPath = FIREBASE_BACKUP_PATH) {
+    function captureLocalRestoreSnapshot() {
+        return { stats: structuredClone(getStatsStore() || {}), storage: getBackupStorageSnapshot(), updatedAt: getLocalDataUpdatedAt() };
+    }
+
+    async function rollbackLocalRestoreSnapshot(snapshot) {
+        inMemoryStatsStore = structuredClone(snapshot.stats || {});
+        statsPersistencePromise = saveStatsToIndexedDBFallback(inMemoryStatsStore);
+        await statsPersistencePromise;
+        Object.keys(getBackupStorageSnapshot()).forEach(key => removeStorageItem(key));
+        Object.entries(snapshot.storage || {}).forEach(([key, value]) => setStorageItem(key, value));
+        if(snapshot.updatedAt) setStorageItem(STORAGE_KEY_LOCAL_DATA_UPDATED_AT, String(snapshot.updatedAt));
+    }
+
+    async function restoreFromFirebase(ts, isAutoPull = false, backupPath = FIREBASE_BACKUP_PATH, options = {}) {
+        const normalizedBackupPath = assertYopleFirebasePath(backupPath);
+        if(normalizedBackupPath !== FIREBASE_BACKUP_PATH) throw new Error('BLOCKED_INVALID_BACKUP_ROOT');
+        const localSnapshot = captureLocalRestoreSnapshot();
+        restoreInProgress = true;
         try {
             logYokiStorageEnvironment('restore:start');
-            const res = await fetch(`${FIREBASE_DB_URL}${backupPath}/${ts}.json`, { cache: 'no-store' });
+            const res = await firebaseRequest(`${normalizedBackupPath}/${ts}`, { cache: 'no-store' });
             if(!res.ok) throw new Error(`Firebase restore fetch failed: ${res.status}`);
             const targetData = await res.json();
             if(!targetData || typeof targetData !== 'object') throw new Error('Firebase restore data is empty');
-            if(!isYokiBackupRecord(targetData, backupPath)) throw new Error(`Blocked non-Yople backup restore: ${targetData.appId || 'unknown'}`);
+            if(!isYokiBackupRecord(targetData, normalizedBackupPath)) throw new Error(`Blocked non-Yople backup restore: ${targetData.appId || 'unknown'}`);
+            await validateBackupData(targetData, { allowSmaller: !!options.allowSmaller });
             logYokiStorageDiagnostics('before-firebase-restore', targetData);
-            const normalizedManualPayload = normalizeBackupPayload(targetData, isAutoPull ? 'auto-restore' : 'manual-restore', ts, backupPath);
+            const normalizedManualPayload = normalizeBackupPayload(targetData, isAutoPull ? 'auto-restore' : 'manual-restore', ts, normalizedBackupPath);
             applyRestoredState(normalizedManualPayload, normalizedManualPayload.source);
+            statsPersistencePromise = saveStatsToIndexedDBFallback(getStatsStore());
+            await statsPersistencePromise;
+            const persistedStats = await readStatsFromIndexedDBForBackup();
+            if(Object.keys(persistedStats).length !== Number(targetData.statsCount)) throw new Error('RESTORE_VERIFY_STATS_COUNT_FAILED');
             setItemSafe(STORAGE_KEY_LAST_SYNC_TIME, ts.toString());
             logYokiStorageDiagnostics('after-unified-firebase-restore');
             library = {};
@@ -1557,7 +1740,6 @@
             currentIndex = 0;
             await autoScanGitHub();
             migrateLoadedLibraryStatsToYokiIds(isAutoPull ? 'firebase-auto-restore' : 'firebase-manual-restore');
-            saveStatsToIndexedDBFallback(getStatsStore());
             const unifiedSavedSearch = getStorageItem(STORAGE_KEY_SEARCH_QUERY);
             if(unifiedSavedSearch && document.getElementById('search-input')) document.getElementById('search-input').value = unifiedSavedSearch;
             initApp();
@@ -1573,24 +1755,48 @@
                 currentCardId: getCurrentCardId()
             });
             showToast("☁️ 복구 완료", "success");
-            return;
+            return true;
         } catch(e) { 
             console.error('[Firebase Restore Error]', e);
-            if(!isAutoPull) document.getElementById('fb-list-ui').innerHTML = `<div style="padding:20px; text-align:center; color:#fa5252;">복구 중 에러가 발생했습니다.</div>`; 
+            window.__YOPLE_LAST_RESTORE_ERROR__ = e && e.message ? e.message : String(e);
+            await rollbackLocalRestoreSnapshot(localSnapshot).catch(rollbackError => console.error('[Yople Restore Rollback Error]', rollbackError));
+            if(!isAutoPull) document.getElementById('fb-list-ui').innerHTML = `<div style="padding:20px; text-align:center; color:#fa5252;">복구 실패: ${e && e.message ? e.message : e}</div>`;
+            return false;
+        } finally {
+            restoreInProgress = false;
         }
     }
-    // 🔥 [수정됨] 서버 백업 보관 한도를 100개로 대폭 증가
+    async function deleteFirebaseBackup(ts, backupPath = FIREBASE_BACKUP_PATH, options = {}) {
+        const normalizedPath = assertYopleFirebasePath(backupPath);
+        if(normalizedPath !== FIREBASE_BACKUP_PATH || !/^\d+$/.test(String(ts))) throw new Error('BLOCKED_INVALID_BACKUP_DELETE_TARGET');
+        if(!options.skipConfirm && !confirm('이 Yople 백업을 삭제할까요?')) return false;
+        const backupTarget = `${normalizedPath}/${ts}`;
+        const indexTarget = `${FIREBASE_BACKUP_INDEX_PATH}/${ts}`;
+        console.log('YOPLE_BACKUP_DELETE_TARGETS', { backupTarget, indexTarget });
+        const [backupRes, indexRes] = await Promise.all([
+            firebaseRequest(backupTarget, { method: 'DELETE' }),
+            firebaseRequest(indexTarget, { method: 'DELETE' })
+        ]);
+        if(!backupRes.ok || !indexRes.ok) throw new Error(`BACKUP_DELETE_FAILED ${backupRes.status}/${indexRes.status}`);
+        if(!options.silent) {
+            showToast('Yople 백업을 삭제했습니다.', 'success');
+            await fetchFirebaseList();
+        }
+        return true;
+    }
+
+    // 서버 백업 보관 한도 초과분만 Yople 전용 경로에서 정리
     async function cleanupOldBackups() {
         try {
-            const res = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}.json?shallow=true&_t=${Date.now()}`, { cache: 'no-store' });
+            const res = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { shallow: 'true', _t: Date.now() } });
             if(!res.ok) return;
             const data = await res.json();
             if(!data || typeof data !== 'object') return;
             const timestamps = Object.keys(data).filter(ts => /^\d+$/.test(String(ts))).sort((a, b) => Number(a) - Number(b));
             const toDelete = timestamps.slice(0, Math.max(0, timestamps.length - FIREBASE_BACKUP_KEEP_COUNT));
             await Promise.all(toDelete.map(ts => Promise.all([
-                fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_PATH}/${ts}.json`, { method: 'DELETE' }),
-                fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}/${ts}.json`, { method: 'DELETE' })
+                firebaseRequest(`${FIREBASE_BACKUP_PATH}/${ts}`, { method: 'DELETE' }),
+                firebaseRequest(`${FIREBASE_BACKUP_INDEX_PATH}/${ts}`, { method: 'DELETE' })
             ])));
             if(toDelete.length) console.log('[Yople Firebase Cleanup]', { keep: FIREBASE_BACKUP_KEEP_COUNT, deleted: toDelete.length });
         } catch(e) {
@@ -1600,6 +1806,7 @@
 
     async function autoScanGitHub() {
         document.getElementById('loading').style.display = 'block';
+        deckLoadReady = false;
         let fetchSuccess = false;
         try {
             const res = await fetch(`${deckSourceUrl}?t=${Date.now()}`, { cache: 'no-store' });
@@ -1624,6 +1831,7 @@
             }
             if(importResult.statsMigrated || importResult.mapChanged) isDataChanged = true;
             logYokiIdMigrationReport(migrationReport);
+            deckLoadReady = Object.values(library).some(cards => Array.isArray(cards) && cards.length > 0);
             fetchSuccess = true;
         } catch (e) {
             console.error('[Yople Boot Error]', e);
@@ -1637,6 +1845,7 @@
                     console.error('[Yople Boot Error]', cacheError);
                 }
             }
+            if(!deckLoadReady) deckLoadReady = Object.values(library || {}).some(cards => Array.isArray(cards) && cards.length > 0);
             document.getElementById('loading').style.display = 'none';
         }
     }
@@ -3283,6 +3492,7 @@
                 tx.onerror = () => reject(tx.error || new Error('IndexedDB stats save failed'));
             });
             db.close();
+            statsIndexedDbReady = true;
             console.log('[Yople IndexedDB Stats Save]', { count: Object.keys(stats || {}).length });
             return true;
         } catch(e) {
@@ -3308,8 +3518,29 @@
                     console.log('[Yople IndexedDB Stats Loaded]', { count: Object.keys(stats).length });
                 }
             }
+            statsIndexedDbReady = true;
+            statsIndexedDbLoadFailed = false;
         } catch(e) {
+            statsIndexedDbLoadFailed = true;
             console.error('[Yople IndexedDB Stats Load Error]', e);
+        }
+    }
+
+    async function readStatsFromIndexedDBForBackup() {
+        await statsPersistencePromise;
+        if(statsIndexedDbLoadFailed) throw new Error('INDEXEDDB_STATS_READ_FAILED');
+        const db = await openYokiIndexedDB();
+        try {
+            const stats = await new Promise((resolve, reject) => {
+                const tx = db.transaction(YOKI_IDB_STORE, 'readonly');
+                const req = tx.objectStore(YOKI_IDB_STORE).get(YOKI_IDB_STATS_KEY);
+                req.onsuccess = () => resolve(req.result || {});
+                req.onerror = () => reject(req.error || new Error('IndexedDB stats read failed'));
+            });
+            statsIndexedDbReady = true;
+            return stats && typeof stats === 'object' ? stats : {};
+        } finally {
+            db.close();
         }
     }
 
@@ -3546,7 +3777,7 @@
             console.log('CLOUD_BACKUP_FOUND', false);
             return null;
         }
-        const res = await fetch(`${FIREBASE_DB_URL}${latest.path}/${latest.ts}.json?_t=${Date.now()}`, { cache: 'no-store' });
+        const res = await firebaseRequest(`${latest.path}/${latest.ts}`, { cache: 'no-store', query: { _t: Date.now() } });
         if(!res.ok) {
             console.log('CLOUD_BACKUP_FOUND', false);
             return null;
@@ -3584,6 +3815,11 @@
         const incomingNotes = payload.notesByCardUuid || normalizeNotesByCardUuid(raw && raw.notesByCardUuid);
         if(stats && Object.keys(stats).length) setItemSafe(STORAGE_KEY_STATS, JSON.stringify(stats));
         if(reviewHistory && Object.keys(reviewHistory).length) setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(reviewHistory));
+        if(raw.storage && typeof raw.storage === 'object') {
+            Object.entries(raw.storage).forEach(([key, value]) => {
+                if(key.startsWith(APP_CONFIG.storagePrefix) && key !== STORAGE_KEY_STATS && value !== null) setItemSafe(key, String(value));
+            });
+        }
         if(hasBackupField(raw, 'notesByCardUuid')) setNotesByCardUuid(incomingNotes);
         if(hasBackupField(raw, 'progress')) setItemSafe(STORAGE_KEY_PROGRESS, raw.progress);
         if(hasBackupField(raw, 'filter')) setItemSafe(STORAGE_KEY_FILTER_STATE, raw.filter);
@@ -3595,6 +3831,17 @@
         if(hasBackupField(raw, 'localEdits')) setItemSafe(STORAGE_KEY_LOCAL_EDITS, raw.localEdits);
         if(hasBackupField(raw, 'cardIdMap')) setItemSafe(STORAGE_KEY_CARD_ID_MAP, raw.cardIdMap);
         if(hasBackupField(raw, 'searchQuery')) setItemSafe(STORAGE_KEY_SEARCH_QUERY, raw.searchQuery);
+        if(raw.todayEssential && typeof raw.todayEssential === 'object') {
+            todayEssentialState = {
+                ...todayEssentialState,
+                ...raw.todayEssential,
+                active: false,
+                processedIds: new Set(raw.todayEssential.processedIds || []),
+                todayCandidates: [],
+                prepared: null,
+                completedShown: false
+            };
+        }
         const restoredViewState = restorePosition(payload.viewState || getBackupViewState(raw), source);
         const restoredUpdatedAt = Number(payload.updatedAt) || getLocalDataUpdatedAt();
         if(restoredUpdatedAt) markLocalDataUpdated(source === 'cloud' ? restoredUpdatedAt : Math.max(getLocalDataUpdatedAt(), restoredUpdatedAt));
@@ -3754,7 +4001,7 @@
     async function getLatestYokiBackupIndexRecord() {
         if (YOKI_TEST_MODE) return null;
         try {
-            const indexRes = await fetch(`${FIREBASE_DB_URL}${FIREBASE_BACKUP_INDEX_PATH}.json?_t=${Date.now()}`, { cache: 'no-store' });
+            const indexRes = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { _t: Date.now() } });
             if (!indexRes.ok) throw new Error(`Firebase backup index fetch failed: ${indexRes.status}`);
             const selected = selectSafeBackupIndexRecord(await indexRes.json());
             if (selected) return selected;
@@ -4361,6 +4608,18 @@
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
         window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js', { scope: './' })
             .catch(error => console.error('[Yople Service Worker]', error)));
+    }
+
+    async function restoreLatestSafeFirebaseBackup() {
+        try {
+            showToast('최신 정상 Yople 백업을 확인합니다...', 'normal');
+            const latest = await getLatestYokiBackupIndexRecord();
+            if(!latest) throw new Error('SAFE_BACKUP_NOT_FOUND');
+            return await restoreFromFirebase(latest.ts, false, latest.path);
+        } catch(e) {
+            showToast(`최신 백업 복구 실패: ${e && e.message ? e.message : e}`, 'error');
+            return false;
+        }
     }
 </script>
 </body>

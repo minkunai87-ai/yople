@@ -1,0 +1,18 @@
+{
+  "apps": {
+    "yople": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "backups": {
+        "$backupId": {
+          ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'stats', 'statsCount', 'cardCount', 'metadata', 'integrity']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsCount').isNumber() && newData.child('statsCount').val() > 0 && newData.child('cardCount').isNumber() && newData.child('cardCount').val() > 0 && newData.child('integrity/algorithm').val() === 'SHA-256' && newData.child('integrity/checksum').isString()"
+        }
+      },
+      "backupIndex": {
+        "$backupId": {
+          ".validate": "$backupId.matches(/^\\d+$/) && newData.hasChildren(['appId', 'schemaVersion', 'timestamp', 'statsKeyCount', 'cardCount', 'checksum', 'metadata']) && newData.child('appId').val() === 'yople' && newData.child('schemaVersion').val() === 2 && newData.child('timestamp').val() == $backupId * 1 && newData.child('statsKeyCount').isNumber() && newData.child('statsKeyCount').val() > 0 && newData.child('checksum').isString()"
+        }
+      }
+    }
+  }
+}
