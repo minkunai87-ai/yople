@@ -52,6 +52,7 @@ async function openProfile(debugPort) {
 
 const testName = `codex-yople-live-${Date.now()}`;
 let timestamp = null;
+let gradedCardUuid = '';
 let testRecordDeleted = false;
 const counts = { yople: { read: 0, write: 0, delete: 0 }, yoki: { read: 0, write: 0, delete: 0 } };
 
@@ -59,20 +60,22 @@ try {
   const first = await openProfile(9341);
   try {
     const created = await first.evaluate(`(async()=>{
+      const gradedCardUuid=String(activeDeck[currentIndex].uuid||activeDeck[currentIndex].id);
       restoreInProgress=true; revealAnswer(); grade(2); await new Promise(r=>setTimeout(r,700)); restoreInProgress=false;
       isDataChanged=true;
       const ok=await performFirebaseBackup(false,{testName:${JSON.stringify(testName)},skipCleanup:true});
-      return {ok,result:window.__YOPLE_LAST_BACKUP_RESULT__,statsCount:Object.keys(getStatsStore()).length,audit:window.__YOPLE_FIREBASE_AUDIT__};
+      return {ok,result:window.__YOPLE_LAST_BACKUP_RESULT__,gradedCardUuid,statsKeys:Object.keys(getStatsStore()),statsCount:Object.keys(getStatsStore()).length,audit:window.__YOPLE_FIREBASE_AUDIT__};
     })()`);
-    if(!created.ok || created.statsCount !== 1 || !created.result?.timestamp) throw new Error(`Live backup creation failed: ${JSON.stringify(created)}`);
+    if(!created.ok || created.statsCount !== 1 || created.statsKeys[0] !== created.gradedCardUuid || !created.result?.timestamp) throw new Error(`Live backup creation failed: ${JSON.stringify(created)}`);
+    gradedCardUuid = created.gradedCardUuid;
     timestamp = created.result.timestamp;
     const restored = await first.evaluate(`(async()=>{
       inMemoryStatsStore={}; await saveStatsToIndexedDBFallback({});
       const before=Object.keys(getStatsStore()).length;
       const ok=await restoreFromFirebase(${JSON.stringify(timestamp)},false,FIREBASE_BACKUP_PATH,{allowSmaller:true});
-      return {before,ok,after:Object.keys(getStatsStore()).length,stat:Object.values(getStatsStore())[0],restoreError:window.__YOPLE_LAST_RESTORE_ERROR__||'',audit:window.__YOPLE_FIREBASE_AUDIT__};
+      return {before,ok,after:Object.keys(getStatsStore()).length,statsKeys:Object.keys(getStatsStore()),stat:Object.values(getStatsStore())[0],restoreError:window.__YOPLE_LAST_RESTORE_ERROR__||'',audit:window.__YOPLE_FIREBASE_AUDIT__};
     })()`);
-    if(!restored.ok || restored.before !== 0 || restored.after !== 1 || !restored.stat?.fsrs || restored.stat.history?.length !== 1) throw new Error(`First-profile restore failed: ${JSON.stringify(restored)}`);
+    if(!restored.ok || restored.before !== 0 || restored.after !== 1 || restored.statsKeys[0] !== created.gradedCardUuid || !restored.stat?.fsrs || restored.stat.history?.length !== 1) throw new Error(`First-profile restore failed: ${JSON.stringify(restored)}`);
     counts.yople.read += restored.audit.reads; counts.yople.write += restored.audit.writes - restored.audit.deletes; counts.yople.delete += restored.audit.deletes;
   } finally { first.close(); }
 
@@ -83,9 +86,9 @@ try {
       const ok=await restoreFromFirebase(${JSON.stringify(timestamp)},false,FIREBASE_BACKUP_PATH,{allowSmaller:true});
       const restored=Object.keys(getStatsStore()).length;
       const stat=Object.values(getStatsStore())[0];
-      return {initial,ok,restored,stat,audit:window.__YOPLE_FIREBASE_AUDIT__};
+      return {initial,ok,restored,statsKeys:Object.keys(getStatsStore()),stat,audit:window.__YOPLE_FIREBASE_AUDIT__};
     })()`);
-    if(crossDevice.initial !== 0 || !crossDevice.ok || crossDevice.restored !== 1 || !crossDevice.stat?.fsrs || crossDevice.stat.history?.length !== 1) throw new Error(`Second-profile restore failed: ${JSON.stringify(crossDevice)}`);
+    if(crossDevice.initial !== 0 || !crossDevice.ok || crossDevice.restored !== 1 || crossDevice.statsKeys[0] !== gradedCardUuid || !crossDevice.stat?.fsrs || crossDevice.stat.history?.length !== 1) throw new Error(`Second-profile restore failed: ${JSON.stringify(crossDevice)}`);
     await second.evaluate(`location.reload()`);
     await delay(3000);
     const afterReload = await second.evaluate(`({statsCount:Object.keys(getStatsStore()).length,stat:Object.values(getStatsStore())[0]})`);

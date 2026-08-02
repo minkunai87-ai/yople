@@ -262,7 +262,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.5 - Anki 원래순서 정렬</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.6 - Anki GUID 매칭</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -516,7 +516,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.5 - Anki 원래순서 정렬';
+    const APP_VERSION = 'Yople v11.19.6 - Anki GUID 매칭';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -2453,6 +2453,23 @@
     function parseYokiRow(fields, defaultDeck) {
         if(!fields || !fields.length) return null;
         const first = String(fields[0] || '').trim();
+        const second = String(fields[1] || '').trim();
+        const third = String(fields[2] || '');
+        const hasExplicitGuid = fields.length >= 6 && first !== '' && second !== '' && !/<(?:img|div|span|p|br)\b/i.test(second) && (/<img\b/i.test(third) || !!normalizeOriginalOrder(fields.at(-1)));
+        if(hasExplicitGuid) {
+            const deckPath = String(fields[1] || '').trim();
+            return {
+                fixedId: first,
+                uuid: first,
+                deckPath,
+                deck: deckPath.replace(/::/g, '__'),
+                q: fields[2] || '',
+                a: fields.slice(3).join('<br>'),
+                front: fields[2] || '',
+                back: fields[3] || '',
+                extraImage: fields[4] || ''
+            };
+        }
         if(first.startsWith('yople_')) {
             if(fields.length >= 4) return { fixedId: first, deck: String(fields[1] || defaultDeck).replace(/::/g, '__'), q: fields[2] || '', a: fields.slice(3).join('<br>') };
             if(fields.length >= 3) return { fixedId: first, deck: defaultDeck, q: fields[1] || '', a: fields.slice(2).join('<br>') };
@@ -2464,7 +2481,7 @@
     }
 
     function createYokiIdMigrationReport() {
-        return { totalCards: 0, yokiIdCards: 0, matchedStats: 0, migratedCount: 0, failedExamples: [], conflicts: [], seenIds: new Set() };
+        return { totalCards: 0, yokiIdCards: 0, explicitUuidCards: 0, matchedStats: 0, migratedCount: 0, duplicateUuids: new Set(), failedExamples: [], conflicts: [], seenIds: new Set() };
     }
 
     function getStatRank(stat = {}) {
@@ -2515,6 +2532,7 @@
         if(!report || !card) return;
         report.totalCards++;
         if(String(card.id || '').startsWith('yople_')) report.yokiIdCards++;
+        if(card.uuid) report.explicitUuidCards++;
         if(findStatsForCard(card, stats)) report.matchedStats++;
         else if(report.failedExamples.length < 5) {
             report.failedExamples.push({ id: String(card.id), deck: card.deck || '', q: String(card.q || '').replace(/<[^>]*>/g, ' ').slice(0, 80), candidates: getCardStatsCandidates(card).slice(0, 6) });
@@ -2526,10 +2544,13 @@
         console.log('[Yople Fixed ID Migration Report]', {
             totalCards: report.totalCards,
             yokiIdCards: report.yokiIdCards,
+            explicitUuidCards: report.explicitUuidCards,
             statsMatchedCount: report.matchedStats,
             migratedFromLegacyCount: report.migratedCount,
             failedExamples: report.failedExamples,
-            conflictCount: report.conflicts.length
+            conflictCount: report.conflicts.length,
+            duplicateUuidCount: report.duplicateUuids ? report.duplicateUuids.size : 0,
+            duplicateUuids: report.duplicateUuids ? [...report.duplicateUuids].slice(0, 100) : []
         });
     }
 
@@ -2605,6 +2626,7 @@
         const localEdits = JSON.parse(getStorageItem(STORAGE_KEY_LOCAL_EDITS) || '{}');
         const cardIdMap = getCardIdMap();
         const importIds = migrationReport && migrationReport.seenIds ? migrationReport.seenIds : new Set();
+        const duplicateUuids = migrationReport && migrationReport.duplicateUuids ? migrationReport.duplicateUuids : new Set();
         let mapChanged = false;
         let statsMigrated = false;
         
@@ -2630,7 +2652,11 @@
 
             const idCandidates = [mappedYokiId, ...getCardIdCandidates(q)];
             const finalId = mappedYokiId;
-            if(importIds.has(finalId)) console.warn('[Yople Duplicate Card ID]', finalId, { deck: deckNameInRow, rowIndex, q: String(q).slice(0, 80) });
+            if(importIds.has(finalId)) {
+                duplicateUuids.add(String(finalId));
+                console.error('[Yople Duplicate Card UUID Excluded]', { uuid: String(finalId), deck: deckNameInRow, rowIndex });
+                return;
+            }
             importIds.add(finalId);
             const migrated = migrateLegacyStatsToYokiId(finalId, q, stats, migrationReport);
             if(migrated) statsMigrated = true;
@@ -2639,13 +2665,25 @@
             if (localEditId) { q = localEdits[localEditId].q; a = localEdits[localEditId].a; }
             
             if(!library[deckNameInRow]) library[deckNameInRow] = [];
-            const card = { id: finalId, idCandidates: [...new Set([finalId, ...idCandidates])], q, a, deck: deckNameInRow, originalOrder };
+            const card = {
+                id: finalId,
+                uuid: parsed.uuid || '',
+                idCandidates: [...new Set([finalId, ...idCandidates])],
+                q,
+                a,
+                front: parsed.front ?? q,
+                back: parsed.back ?? a,
+                extraImage: parsed.extraImage || '',
+                deck: deckNameInRow,
+                deckPath: parsed.deckPath || String(deckNameInRow).replace(/__/g, '::'),
+                originalOrder
+            };
             library[deckNameInRow].push(card);
             recordYokiIdMigrationReportCard(migrationReport, card, stats, migrated);
         });
 
         if(mapChanged) saveCardIdMap(cardIdMap);
-        return { statsMigrated, mapChanged };
+        return { statsMigrated, mapChanged, duplicateUuidCount: duplicateUuids.size, duplicateUuids: [...duplicateUuids] };
     }
     function parseRecentDecks(value = getStorageItem(STORAGE_KEY_RECENT_DECKS)) {
         const rawItems = parseJSONSafe(value, []);
@@ -4803,6 +4841,7 @@
 
         if(card) {
             const q = card.q || '';
+            ids.push(card.uuid);
             ids.push(card.id);
             if(Array.isArray(card.idCandidates)) ids.push(...card.idCandidates);
             if(stats) ids.push(resolveCardId(q, stats));

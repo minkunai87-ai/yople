@@ -1,5 +1,5 @@
-const APP_CACHE = 'yople-app-shell-v2';
-const IMAGE_CACHE = 'yople-images-v2';
+const APP_CACHE = 'yople-app-shell-v3';
+const IMAGE_CACHE = 'yople-images-v3';
 const YOPLE_CACHE_PREFIX = 'yople-';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './yople-icon.svg', './행정법.txt'];
 
