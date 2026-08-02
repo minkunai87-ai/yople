@@ -53,6 +53,8 @@ async function openProfile(debugPort) {
 const testName = `codex-yople-live-${Date.now()}`;
 let timestamp = null;
 let gradedCardUuid = '';
+let automaticTimestamp = null;
+let manualRepeat = null;
 let testRecordDeleted = false;
 const counts = { yople: { read: 0, write: 0, delete: 0 }, yoki: { read: 0, write: 0, delete: 0 } };
 
@@ -69,6 +71,16 @@ try {
     if(!created.ok || created.statsCount !== 1 || created.statsKeys[0] !== created.gradedCardUuid || !created.result?.timestamp) throw new Error(`Live backup creation failed: ${JSON.stringify(created)}`);
     gradedCardUuid = created.gradedCardUuid;
     timestamp = created.result.timestamp;
+    manualRepeat = await first.evaluate(`(async()=>{
+      isDataChanged=true;
+      const ok=await performFirebaseBackup(false,{testName:${JSON.stringify(testName + '-repeat')},skipCleanup:true});
+      const result=window.__YOPLE_LAST_BACKUP_RESULT__;
+      const different=!!(result&&result.timestamp&&result.timestamp!==${JSON.stringify(timestamp)});
+      let deleted=false,backupAfter='not-created',indexAfter='not-created';
+      if(different){deleted=await deleteFirebaseBackup(result.timestamp,FIREBASE_BACKUP_PATH,{skipConfirm:true,silent:true});const a=await firebaseRequest(FIREBASE_BACKUP_PATH+'/'+result.timestamp);const b=await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH+'/'+result.timestamp);backupAfter=await a.json();indexAfter=await b.json()}
+      return{ok,result,different,deleted,backupAfter,indexAfter};
+    })()`);
+    if(!manualRepeat.ok||!manualRepeat.different||!manualRepeat.deleted||manualRepeat.backupAfter!==null||manualRepeat.indexAfter!==null) throw new Error(`Repeated manual backup failed: ${JSON.stringify(manualRepeat)}`);
     const restored = await first.evaluate(`(async()=>{
       inMemoryStatsStore={}; await saveStatsToIndexedDBFallback({});
       const before=Object.keys(getStatsStore()).length;
@@ -101,10 +113,26 @@ try {
     })()`);
     if(!cleanup.deleted || cleanup.backupAfter !== null || cleanup.indexAfter !== null) throw new Error(`Test cleanup failed: ${JSON.stringify(cleanup)}`);
     testRecordDeleted = true;
+    const automatic = await second.evaluate(`(async()=>{
+      const oldCleanup=cleanupOldBackups;cleanupOldBackups=async()=>true;window.__YOPLE_LAST_BACKUP_RESULT__=null;window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__=null;window.__YOPLE_LAST_BACKUP_ERROR__='';
+      revealAnswer();grade(2);
+      const deadline=Date.now()+20000;
+      while(!window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__&&Date.now()<deadline) await new Promise(r=>setTimeout(r,100));
+      const result=window.__YOPLE_LAST_BACKUP_RESULT__;
+      const diagnostic=window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__;
+      const duplicateAttempt=result?await flushBackupToFirebase(true,{reason:'duplicate-check',skipCleanup:true}):null;
+      let deleted=false,backupAfter='not-created',indexAfter='not-created';
+      if(result&&result.timestamp){deleted=await deleteFirebaseBackup(result.timestamp,FIREBASE_BACKUP_PATH,{skipConfirm:true,silent:true});const a=await firebaseRequest(FIREBASE_BACKUP_PATH+'/'+result.timestamp);const b=await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH+'/'+result.timestamp);backupAfter=await a.json();indexAfter=await b.json()}
+      cleanupOldBackups=oldCleanup;
+      return{result,diagnostic,error:window.__YOPLE_LAST_BACKUP_ERROR__,duplicateAttempt,deleted,backupAfter,indexAfter,statsCount:Object.keys(getStatsStore()).length,historyCount:Object.values(getStatsStore()).reduce((n,s)=>n+(s.history?.length||0),0),flags:{isFullRecalculating,restoreInProgress,isBooting,statsWritesInProgress,isBackupInFlight,backupScheduled,isDataChanged},audit:window.__YOPLE_FIREBASE_AUDIT__};
+    })()`);
+    automaticTimestamp = automatic.result?.timestamp || null;
+    if(!automatic.result?.timestamp || automatic.duplicateAttempt !== false || !automatic.deleted || automatic.backupAfter !== null || automatic.indexAfter !== null) throw new Error(`Automatic backup failed: ${JSON.stringify(automatic)}`);
+    automaticTimestamp = null;
     counts.yople.read += crossDevice.audit.reads + cleanup.audit.reads;
     counts.yople.write += (crossDevice.audit.writes - crossDevice.audit.deletes) + (cleanup.audit.writes - cleanup.audit.deletes);
     counts.yople.delete += crossDevice.audit.deletes + cleanup.audit.deletes;
-    console.log(JSON.stringify({ testName, timestamp, created: true, firstProfileRestore: true, secondProfileRestore: true, reloadPersistence: true, deleted: true, counts, crossDevice, afterReload, cleanup }, null, 2));
+    console.log(JSON.stringify({ testName, timestamp, created: true, manualRepeat, firstProfileRestore: true, secondProfileRestore: true, reloadPersistence: true, deleted: true, counts, crossDevice, afterReload, cleanup, automatic }, null, 2));
   } finally { second.close(); }
 } finally {
   if(timestamp && !testRecordDeleted) {
@@ -114,6 +142,13 @@ try {
       fetch(`${base}/backups/${timestamp}.json`, { method: 'DELETE' }),
       fetch(`${base}/backupIndex/${timestamp}.json`, { method: 'DELETE' })
     ]).catch(error => console.error('EMERGENCY_TEST_CLEANUP_FAILED', error));
+  }
+  if(automaticTimestamp) {
+    const base='https://yokiapp-afcca-default-rtdb.firebaseio.com/apps/yople';
+    await Promise.all([
+      fetch(`${base}/backups/${automaticTimestamp}.json`, { method: 'DELETE' }),
+      fetch(`${base}/backupIndex/${automaticTimestamp}.json`, { method: 'DELETE' })
+    ]).catch(error => console.error('EMERGENCY_AUTO_TEST_CLEANUP_FAILED', error));
   }
   server.kill();
 }

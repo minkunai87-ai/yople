@@ -262,7 +262,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.6 - Anki GUID 매칭</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.7 - Firebase GUID 백업</div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -516,7 +516,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.6 - Anki GUID 매칭';
+    const APP_VERSION = 'Yople v11.19.7 - Firebase GUID 백업';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -785,7 +785,16 @@
         console.log('YOPLE_FIREBASE_REQUEST', { method, path: normalized });
         const options = { ...init };
         delete options.query;
-        return fetch(`${FIREBASE_DB_URL}${normalized}.json${query}`, options);
+        const url = `${FIREBASE_DB_URL}${normalized}.json${query}`;
+        try {
+            const response = await fetch(url, options);
+            const responseBody = await response.clone().text().catch(() => '');
+            console.log('[Yople Firebase REST]', { method, path: normalized, url, status: response.status, ok: response.ok, response: responseBody.slice(0, 500) });
+            return response;
+        } catch(error) {
+            console.error('[Yople Firebase REST Network Error]', { method, path: normalized, url, error: error && error.message ? error.message : String(error) });
+            throw error;
+        }
     }
 
     function stableStringify(value) {
@@ -817,6 +826,11 @@
     }
     let backupTimer = null;
     let isBackupInFlight = false;
+    let backupInFlightPromise = null;
+    let backupScheduled = false;
+    let pendingBackupReason = '';
+    let lastBackupBlockReason = '';
+    let autoBackupRetryCount = 0;
     let isBooting = true;
     const BACKUP_DEBOUNCE_MS = 3000;
     let isDataChanged = false;
@@ -1581,22 +1595,25 @@
 
     async function triggerManualBackup() {
         showToast("🚀 수동 백업을 시작합니다...", "normal");
-        isDataChanged = true; 
-        await flushBackupToFirebase(false);
+        isDataChanged = true;
+        await flushBackupToFirebase(false, { reason: 'manual' });
     }
 
     function openFirebaseSettings() { document.getElementById('firebase-connection-status').value = 'Realtime Database · Yople 전용 경로 · 로그인 없음'; showConnectionSection(); document.getElementById('fb-modal').style.display = 'flex'; }
     function showConnectionSection() { document.getElementById('fb-connection-section').style.display = 'block'; document.getElementById('fb-list-section').style.display = 'none'; }
     function updateCloudIcon(status) { const icon = document.getElementById('cloud-icon'); if(!icon) return; icon.className = `cloud-icon ${status}`; icon.innerText = status === 'active' ? '🔄' : (status === 'error' ? '❌' : '🔥'); }
     async function testFirebaseSync() { document.getElementById('fb-modal').style.display = 'none'; isDataChanged = true; await flushBackupToFirebase(false); }
-    function scheduleBackup(reason = '') {
-        if (restoreInProgress || isBooting || isFullRecalculating) return;
+    function scheduleBackup(reason = '', delayMs = BACKUP_DEBOUNCE_MS) {
         isDataChanged = true;
+        pendingBackupReason = reason || pendingBackupReason || 'data-change';
         if (backupTimer) clearTimeout(backupTimer);
+        backupScheduled = true;
         backupTimer = setTimeout(() => {
             backupTimer = null;
-            flushBackupToFirebase(true);
-        }, BACKUP_DEBOUNCE_MS);
+            backupScheduled = false;
+            const scheduledReason = pendingBackupReason;
+            flushBackupToFirebase(true, { reason: scheduledReason }).catch(e => console.error('[Yople Scheduled Backup Error]', e));
+        }, Math.max(0, Number(delayMs) || 0));
     }
 
     function backupReviewNow() {
@@ -1605,7 +1622,55 @@
             clearTimeout(backupTimer);
             backupTimer = null;
         }
-        flushBackupToFirebase(true).catch(e => console.error('[Yople Review Auto Backup Error]', e));
+        pendingBackupReason = 'card-review';
+        flushBackupToFirebase(true, { reason: 'card-review' }).catch(e => console.error('[Yople Review Auto Backup Error]', e));
+    }
+
+    function getBackupRuntimeDiagnostics(stage, extra = {}) {
+        const memoryStats = getStatsStore() || {};
+        const diagnostics = {
+            stage,
+            isAuto: !!extra.isAuto,
+            reason: extra.reason || pendingBackupReason || '',
+            blocked: extra.blocked || '',
+            statsCount: Object.keys(memoryStats).length,
+            cardCount: getLibraryCardIds().size,
+            historyCount: Object.values(memoryStats).reduce((sum, stat) => sum + (Array.isArray(stat && stat.history) ? stat.history.length : 0), 0),
+            statsIndexedDbReady,
+            statsIndexedDbLoadFailed,
+            isFullRecalculating,
+            restoreInProgress,
+            isBooting,
+            statsWritesInProgress,
+            pendingStatsWrites: Math.max(0, statsWriteQueuedRevision - statsWriteCompletedRevision),
+            isBackupInFlight,
+            backupScheduled,
+            isDataChanged,
+            lastBackupAt: Number(getStorageItem(STORAGE_KEY_LAST_BACKUP_AT)) || 0,
+            lastChecksum: getStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM) || '',
+            ...extra
+        };
+        console.log('[Yople Backup Flow]', diagnostics);
+        return diagnostics;
+    }
+
+    function waitWithTimeout(promise, timeoutMs, code) {
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(code)), timeoutMs);
+            Promise.resolve(promise).then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+        });
+    }
+
+    async function waitForManualBackupReadiness(timeoutMs = 15000) {
+        const deadline = Date.now() + timeoutMs;
+        while(isBooting || restoreInProgress || isFullRecalculating || isBackupInFlight || statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision) {
+            const remaining = deadline - Date.now();
+            if(remaining <= 0) throw new Error('BACKUP_WAIT_TIMEOUT');
+            showToast('Firebase 백업 대기 중: 학습 데이터 저장을 완료하고 있습니다.', 'normal');
+            if(isBackupInFlight && backupInFlightPromise) await waitWithTimeout(backupInFlightPromise, remaining, 'BACKUP_WAIT_TIMEOUT');
+            else if(statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision) await waitWithTimeout(waitForPendingStatsWrites(), remaining, 'BACKUP_WAIT_TIMEOUT');
+            else await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
+        }
     }
 
     async function flushBackupToFirebase(isAuto = true, options = {}) {
@@ -1614,17 +1679,36 @@
             console.log('[Yople Test Mode] Firebase backup blocked before network');
             return false;
         }
-        if (!isDataChanged || isBackupInFlight || isFullRecalculating) return false;
+        getBackupRuntimeDiagnostics('flush-enter', { isAuto, reason: options.reason || '' });
+        if(!isAuto) {
+            try { await waitForManualBackupReadiness(Number(options.waitTimeoutMs) || 15000); }
+            catch(error) {
+                lastBackupBlockReason = error.message || String(error);
+                getBackupRuntimeDiagnostics('manual-wait-failed', { isAuto, blocked: lastBackupBlockReason });
+                showToast(`Firebase 백업 실패: ${getBackupErrorMessage(lastBackupBlockReason)}`, 'error');
+                return false;
+            }
+        }
+        if (isAuto && !isDataChanged) return false;
+        if (isAuto && (isBackupInFlight || isFullRecalculating || restoreInProgress || isBooting || statsWritesInProgress > 0 || statsWriteQueuedRevision > statsWriteCompletedRevision)) {
+            lastBackupBlockReason = 'BACKUP_DEFERRED_BUSY';
+            getBackupRuntimeDiagnostics('auto-deferred', { isAuto, blocked: lastBackupBlockReason });
+            scheduleBackup(options.reason || 'busy-retry');
+            return false;
+        }
         if (backupTimer) {
             clearTimeout(backupTimer);
             backupTimer = null;
         }
 
         isBackupInFlight = true;
+        backupScheduled = false;
         try {
-            return await performFirebaseBackup(isAuto, options);
+            backupInFlightPromise = performFirebaseBackup(isAuto, options);
+            return await backupInFlightPromise;
         } finally {
             isBackupInFlight = false;
+            backupInFlightPromise = null;
         }
     }
 
@@ -1671,6 +1755,36 @@
         return Object.fromEntries(keys.map(key => [key, getStorageItem(key)]).filter(([, value]) => value !== null));
     }
 
+    const FIREBASE_UUID_KEY_ENCODING = 'base64url-utf8-v1';
+
+    function encodeFirebaseUuidKey(value) {
+        const bytes = new TextEncoder().encode(String(value));
+        let binary = '';
+        bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+        return `u_${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
+    }
+
+    function decodeFirebaseUuidKey(value) {
+        const encoded = String(value || '');
+        if(!encoded.startsWith('u_')) return encoded;
+        const base64 = encoded.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+        const binary = atob(padded);
+        return new TextDecoder().decode(Uint8Array.from(binary, char => char.charCodeAt(0)));
+    }
+
+    function encodeUuidKeyedObject(value) {
+        if(!value || typeof value !== 'object' || Array.isArray(value)) return value || {};
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [encodeFirebaseUuidKey(key), item]));
+    }
+
+    function decodeUuidKeyedObject(value, encoding) {
+        const parsed = parseBackupField(value, {});
+        if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        if(encoding !== FIREBASE_UUID_KEY_ENCODING) return parsed;
+        return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [decodeFirebaseUuidKey(key), item]));
+    }
+
     async function buildVerifiedBackupData(metadata, backupStats, options = {}) {
         const statsCount = Object.keys(backupStats || {}).length;
         const cardValidation = validateStatsCardIds(backupStats);
@@ -1686,9 +1800,11 @@
             timestamp: metadata.backupAt,
             backupType: options.testName ? 'integration-test' : 'user',
             testName: options.testName || '',
-            stats: backupStats,
-            reviewHistory: parseJSONSafe(getStorageItem(STORAGE_KEY_REVIEW_HISTORY), {}),
-            notesByCardUuid: getNotesByCardUuid(),
+            uuidKeyEncoding: FIREBASE_UUID_KEY_ENCODING,
+            statsKeyEncoding: FIREBASE_UUID_KEY_ENCODING,
+            stats: encodeUuidKeyedObject(backupStats),
+            reviewHistory: encodeUuidKeyedObject(parseJSONSafe(getStorageItem(STORAGE_KEY_REVIEW_HISTORY), {})),
+            notesByCardUuid: encodeUuidKeyedObject(getNotesByCardUuid()),
             storage: getBackupStorageSnapshot(),
             progress: getStorageItem(STORAGE_KEY_PROGRESS) || '{}',
             filter: getStorageItem(STORAGE_KEY_FILTER_STATE) || '{}',
@@ -1738,6 +1854,50 @@
         return { stats, statsCount, checksum };
     }
 
+    function getBackupErrorMessage(code) {
+        const value = String(code || 'UNKNOWN_BACKUP_ERROR');
+        if(value.includes('BACKUP_WAIT_TIMEOUT')) return '학습 데이터 저장 대기 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요. (BACKUP_WAIT_TIMEOUT)';
+        if(value.includes('BACKUP_BLOCKED_EMPTY_STATS')) return 'Stats가 0개여서 빈 백업을 차단했습니다. (BACKUP_BLOCKED_EMPTY_STATS)';
+        if(value.includes('BACKUP_BLOCKED_INDEXEDDB')) return 'Stats 데이터가 아직 IndexedDB와 동기화되지 않았습니다. (BACKUP_BLOCKED_INDEXEDDB)';
+        if(value.includes('BACKUP_BLOCKED_RAPID_STATS_DROP')) return 'Stats가 급감해 데이터 보호를 위해 차단했습니다. (BACKUP_BLOCKED_RAPID_STATS_DROP)';
+        if(value.includes('BACKUP_BLOCKED_INVALID_CARD_IDS')) return '현재 TXT의 UUID와 일치하지 않는 Stats가 있어 차단했습니다. (BACKUP_BLOCKED_INVALID_CARD_IDS)';
+        if(value.includes('BACKUP_BLOCKED_DECK_NOT_READY')) return '카드 로딩이 완료되지 않아 백업을 기다리고 있습니다. (BACKUP_BLOCKED_DECK_NOT_READY)';
+        const httpMatch = value.match(/Firebase\s+(401|403|404|413|429)\b/);
+        if(httpMatch) {
+            const descriptions = { '401': '인증되지 않은 요청입니다.', '403': '데이터베이스 쓰기 권한이 없습니다.', '404': 'Firebase 경로를 찾지 못했습니다.', '413': '백업 크기가 허용 범위를 초과했습니다.', '429': '요청이 너무 많아 제한됐습니다.' };
+            return `HTTP ${httpMatch[1]} — ${descriptions[httpMatch[1]]} (${value})`;
+        }
+        return value;
+    }
+
+    function getUtf8Size(value) {
+        return new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value ?? '')).length;
+    }
+
+    async function getBackupDedupFingerprint(data) {
+        return sha256Hex({
+            appId: data.appId,
+            schemaVersion: data.schemaVersion,
+            stats: data.stats,
+            reviewHistory: data.reviewHistory,
+            notesByCardUuid: data.notesByCardUuid,
+            storage: data.storage,
+            progress: data.progress,
+            filter: data.filter,
+            targetRetention: data.targetRetention,
+            localEdits: data.localEdits,
+            cardIdMap: data.cardIdMap,
+            viewState: data.viewState,
+            todayEssential: data.todayEssential,
+            recentDecks: data.recentDecks,
+            currentCardUuid: data.currentCardUuid,
+            currentCardIndex: data.currentCardIndex,
+            currentSortMode: data.currentSortMode,
+            currentSecondarySortMode: data.currentSecondarySortMode,
+            currentFilterMode: data.currentFilterMode
+        });
+    }
+
     async function performFirebaseBackup(isAuto, options = {}) {
         try {
             if(isFullRecalculating) throw new Error('BACKUP_BLOCKED_FULL_RECALCULATION');
@@ -1749,7 +1909,8 @@
             const backupStats = await readStatsFromIndexedDBForBackup();
             const memoryStatsCount = Object.keys(getStatsStore() || {}).length;
             const backupStatsCount = Object.keys(backupStats || {}).length;
-            if(memoryStatsCount !== backupStatsCount) throw new Error(`BACKUP_BLOCKED_INDEXEDDB_COUNT_MISMATCH memory=${memoryStatsCount} idb=${backupStatsCount}`);
+            const sourceDiagnostics = getStatsSourceDiagnostics(getStatsStore() || {}, backupStats);
+            if(!sourceDiagnostics.equal) throw Object.assign(new Error(`BACKUP_BLOCKED_INDEXEDDB_MISMATCH memory=${memoryStatsCount} idb=${backupStatsCount} memoryOnly=${sourceDiagnostics.memoryOnly.length} idbOnly=${sourceDiagnostics.indexedDbOnly.length} content=${sourceDiagnostics.contentMismatch.length}`), { diagnostics: sourceDiagnostics });
             let largestCloudStatsCount = 0;
             const guardRes = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { _t: Date.now() } });
             if(!guardRes.ok) throw new Error(`BACKUP_GUARD_INDEX_READ_FAILED ${guardRes.status}`);
@@ -1762,17 +1923,39 @@
             const data = await buildVerifiedBackupData(metadata, backupStats, options);
             const payloadText = JSON.stringify(data);
             JSON.parse(payloadText);
-            const payloadSizeKB = Math.round(payloadText.length / 1024);
+            const payloadBytes = getUtf8Size(payloadText);
+            const payloadSizeKB = Math.round(payloadBytes / 1024);
             if(!payloadText.length || payloadSizeKB > 50000) throw new Error(`BACKUP_BLOCKED_INVALID_SIZE ${payloadSizeKB}KB`);
+            const dedupFingerprint = await getBackupDedupFingerprint(data);
             const lastChecksum = getStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM) || '';
             const lastBackupAt = Number(getStorageItem(STORAGE_KEY_LAST_BACKUP_AT)) || 0;
-            if(isAuto && data.integrity.checksum === lastChecksum) return false;
-            if(isAuto && Date.now() - lastBackupAt < AUTO_BACKUP_MIN_INTERVAL_MS) return false;
+            if(isAuto && dedupFingerprint === lastChecksum) {
+                isDataChanged = false;
+                pendingBackupReason = '';
+                lastBackupBlockReason = 'BACKUP_SKIPPED_IDENTICAL_CONTENT';
+                getBackupRuntimeDiagnostics('auto-skip-identical', { isAuto, currentChecksum: dedupFingerprint, blocked: lastBackupBlockReason });
+                window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__ = { ok: false, skipped: true, reason: lastBackupBlockReason, isAuto, timestamp: Date.now() };
+                return false;
+            }
+            const elapsedSinceBackup = Date.now() - lastBackupAt;
+            if(isAuto && elapsedSinceBackup < AUTO_BACKUP_MIN_INTERVAL_MS) {
+                const retryAfter = AUTO_BACKUP_MIN_INTERVAL_MS - elapsedSinceBackup + 100;
+                lastBackupBlockReason = 'BACKUP_DEFERRED_MIN_INTERVAL';
+                getBackupRuntimeDiagnostics('auto-deferred-interval', { isAuto, currentChecksum: dedupFingerprint, retryAfter, blocked: lastBackupBlockReason });
+                window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__ = { ok: false, deferred: true, reason: lastBackupBlockReason, retryAfter, isAuto, timestamp: Date.now() };
+                scheduleBackup(options.reason || 'minimum-interval-retry', retryAfter);
+                return false;
+            }
             const payloadBreakdownKB = {
                 totalKB: payloadSizeKB,
-                statsKB: Math.round(JSON.stringify(data.stats || '').length / 1024),
+                totalChars: payloadText.length,
+                totalBytes: payloadBytes,
+                statsKB: Math.round(getUtf8Size(data.stats || {}) / 1024),
+                storageKB: Math.round(getUtf8Size(data.storage || {}) / 1024),
+                historyKB: Math.round(getUtf8Size(data.reviewHistory || {}) / 1024),
+                notesKB: Math.round(getUtf8Size(data.notesByCardUuid || {}) / 1024),
                 cardIdentityMapKB: 0,
-                libraryKB: Math.round(JSON.stringify(data.library || '').length / 1024),
+                libraryKB: data.library ? Math.round(getUtf8Size(data.library) / 1024) : 0,
                 diagnosticsKB: 0
             };
             const backupIndexData = {
@@ -1784,6 +1967,7 @@
                 statsKeyCount: backupStatsCount,
                 cardCount: data.cardCount,
                 checksum: data.integrity.checksum,
+                contentFingerprint: dedupFingerprint,
                 backupType: data.backupType,
                 testName: data.testName,
                 localUpdatedAt: data.localUpdatedAt,
@@ -1812,10 +1996,14 @@
                 console.log('BACKUP_INDEX_WRITE_SUCCESS', true);
                 console.log('BACKUP_WRITE_SUCCESS', true);
                 isDataChanged = false; 
+                pendingBackupReason = '';
+                lastBackupBlockReason = '';
+                autoBackupRetryCount = 0;
                 setStorageItem(STORAGE_KEY_LAST_SYNC_TIME, data.timestamp.toString());
-                setStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM, data.integrity.checksum);
+                setStorageItem(STORAGE_KEY_LAST_BACKUP_CHECKSUM, dedupFingerprint);
                 setStorageItem(STORAGE_KEY_LAST_BACKUP_AT, String(Date.now()));
                 window.__YOPLE_LAST_BACKUP_RESULT__ = { timestamp: data.timestamp, path: backupRecordPath, checksum: data.integrity.checksum, testName: data.testName };
+                window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__ = { ok: true, isAuto, timestamp: data.timestamp, path: backupRecordPath, statsCount: backupStatsCount, payloadBreakdownKB };
                 updateCloudIcon('done');
                 if(!options.keepalive && !options.skipCleanup) cleanupOldBackups();
                 if(!isAuto) showToast("🚀 수동 백업 100% 성공!", "success"); 
@@ -1826,8 +2014,23 @@
         } catch(e) {
             console.error('[Yople Backup Error]', e);
             console.log('BACKUP_WRITE_SUCCESS', false);
+            lastBackupBlockReason = e && e.message ? e.message : String(e);
+            window.__YOPLE_LAST_BACKUP_ERROR__ = lastBackupBlockReason;
+            window.__YOPLE_LAST_BACKUP_DIAGNOSTIC__ = { ok: false, isAuto, reason: lastBackupBlockReason, timestamp: Date.now() };
+            getBackupRuntimeDiagnostics('backup-failed', { isAuto, blocked: lastBackupBlockReason, diagnostics: e && e.diagnostics ? {
+                memoryCount: e.diagnostics.memoryCount,
+                indexedDbCount: e.diagnostics.indexedDbCount,
+                memoryOnlyCount: e.diagnostics.memoryOnly.length,
+                indexedDbOnlyCount: e.diagnostics.indexedDbOnly.length,
+                contentMismatchCount: e.diagnostics.contentMismatch.length
+            } : null });
             updateCloudIcon('error');
-            if(!isAuto) showToast(`❌ 백업 실패: ${e && e.message ? e.message : e}`, "error");
+            const retryable = /Firebase|NETWORK|BACKUP_GUARD_INDEX_READ_FAILED|BACKUP_INDEX_WRITE_FAILED/i.test(lastBackupBlockReason);
+            if(isAuto && isDataChanged && retryable && autoBackupRetryCount < 3) {
+                autoBackupRetryCount++;
+                scheduleBackup(`retry-${autoBackupRetryCount}`, Math.min(30000, 5000 * autoBackupRetryCount));
+            }
+            if(!isAuto) showToast(`Firebase 백업 실패: ${getBackupErrorMessage(lastBackupBlockReason)}`, "error");
             return false;
         }
     }
@@ -4334,7 +4537,7 @@
     function normalizeBackupPayload(raw = {}, source = 'backup', ts = raw && raw.timestamp, path = FIREBASE_BACKUP_PATH, index = {}) {
         const viewState = compactStudyViewState(getBackupViewState(raw || {}));
         const stats = getBackupStatsCandidate(raw || {});
-        const reviewHistory = parseJSONSafe(raw && raw.reviewHistory, {});
+        const reviewHistory = decodeUuidKeyedObject(raw && raw.reviewHistory, raw && raw.uuidKeyEncoding);
         return {
             raw,
             source,
@@ -4351,8 +4554,8 @@
         console.log('RESTORE_START', { source });
         const raw = payload.raw || payload;
         const stats = payload.stats || getBackupStatsCandidate(raw);
-        const reviewHistory = payload.reviewHistory || parseJSONSafe(raw && raw.reviewHistory, {});
-        const incomingNotes = payload.notesByCardUuid || normalizeNotesByCardUuid(raw && raw.notesByCardUuid);
+        const reviewHistory = payload.reviewHistory || decodeUuidKeyedObject(raw && raw.reviewHistory, raw && raw.uuidKeyEncoding);
+        const incomingNotes = payload.notesByCardUuid || normalizeNotesByCardUuid(decodeUuidKeyedObject(raw && raw.notesByCardUuid, raw && raw.uuidKeyEncoding));
         if(stats && Object.keys(stats).length) setItemSafe(STORAGE_KEY_STATS, JSON.stringify(stats));
         if(reviewHistory && Object.keys(reviewHistory).length) setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(reviewHistory));
         if(raw.storage && typeof raw.storage === 'object') {
@@ -5088,7 +5291,7 @@
         ];
         for(const candidate of candidates) {
             const parsed = parseBackupField(candidate, null);
-            if(parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+            if(parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return decodeUuidKeyedObject(parsed, data && (data.statsKeyEncoding || data.uuidKeyEncoding));
         }
         return {};
     }
