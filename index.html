@@ -158,10 +158,11 @@
     .pin-image-toolbar { position: relative; z-index: 12; display: flex; justify-content: flex-end; gap: 5px; margin: 0 2px 5px; }
     .pin-image-btn { border: 1px solid var(--border); border-radius: 7px; background: var(--input-bg); color: var(--text-sub); padding: 4px 7px; font-size: 0.72rem; line-height: 1.15; cursor: pointer; touch-action: manipulation; }
     .pin-image-btn:active, .pin-image-btn.active { color: var(--primary); border-color: var(--primary); background: var(--btn-hover); }
-    .pin-image-stage { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 8px; overflow: hidden; }
+    .pin-image-stage { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 8px; overflow: hidden; font-size: 0.72rem; }
     .pin-image-stage > img { margin: 0 auto; }
     .pin-image-stage.pin-placement { cursor: crosshair; outline: 2px dashed var(--primary); outline-offset: 3px; touch-action: manipulation; }
-    .image-pin-marker { position: absolute; font-size: 0.72rem; line-height: 1; transform: translate(-50%, -50%); pointer-events: none; z-index: 8; }
+    .image-pin-marker { position: absolute; font-size: 1em; line-height: 1; transform: translate(-50%, -50%); pointer-events: none; z-index: 8; }
+    @media (max-width: 390px) { .image-pin-marker { font-size: 0.85em; } }
 
     .divider { display: none; border: 0; border-top: 2px dashed var(--border); margin: 15px 0; position: relative; }
     .divider::after { content: "정답"; position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; color: var(--text-sub); font-size: 0.8rem; font-weight: bold; }
@@ -524,7 +525,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.20.2 - 이전 문제 좌표 참고';
+    const APP_VERSION = 'Yople v11.20.3 - 소형 화면 핀 마커';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
