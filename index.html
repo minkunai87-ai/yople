@@ -525,7 +525,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.20.3 - 소형 화면 핀 마커';
+    const APP_VERSION = 'Yople v11.21.0 - 안전 시작 동기화';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -1580,7 +1580,7 @@
                 library = loadSafeYokiLibraryFromStorage();
             }
 
-            // 최초 실행은 항상 로컬 빈 학습 상태로 시작한다. 클라우드 복구는 사용자가 직접 실행한다.
+            await syncLatestFirebaseBackupOnStartup();
 
             try {
                 initApp();
@@ -4702,24 +4702,40 @@
     }
 
     async function loadCloudStudyState() {
-        const latest = await getLatestYokiBackupIndexRecord();
-        console.log('CLOUD_PATH_USED', latest && latest.ts ? `${latest.path}/${latest.ts}` : null);
-        if(!latest || !latest.ts) {
-            console.log('CLOUD_BACKUP_FOUND', false);
+        window.__YOPLE_STARTUP_CLOUD_IGNORED__ = [];
+        if(YOKI_TEST_MODE) return null;
+        let indexData = {};
+        try {
+            const indexRes = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache: 'no-store', query: { _t: Date.now() } });
+            if(!indexRes.ok) throw new Error(`Firebase backup index fetch failed: ${indexRes.status}`);
+            indexData = await indexRes.json() || {};
+        } catch(e) {
+            console.warn('[Yople Startup Cloud Index Failed]', e);
             return null;
         }
-        const res = await firebaseRequest(`${latest.path}/${latest.ts}`, { cache: 'no-store', query: { _t: Date.now() } });
-        if(!res.ok) {
-            console.log('CLOUD_BACKUP_FOUND', false);
-            return null;
+        const { candidates, rejected } = getSafeBackupIndexRecords(indexData);
+        const validationIgnored = [];
+        for(const candidate of candidates) {
+            try {
+                const res = await firebaseRequest(`${candidate.path}/${candidate.ts}`, { cache: 'no-store', query: { _t: Date.now() } });
+                if(!res.ok) throw new Error(`HTTP_${res.status}`);
+                const data = await res.json();
+                if(!isYokiBackupRecord(data, candidate.path)) throw new Error('INVALID_BACKUP_APP_ID');
+                await validateBackupData(data, { allowSmaller: true });
+                const payload = normalizeBackupPayload(data, 'cloud', candidate.ts, candidate.path, candidate.index);
+                window.__YOPLE_STARTUP_CLOUD_IGNORED__ = [...rejected.filter(item => Number(item.ts) > Number(candidate.ts)), ...validationIgnored];
+                console.log('CLOUD_PATH_USED', `${candidate.path}/${candidate.ts}`);
+                console.log('CLOUD_BACKUP_UPDATED_AT', payload.updatedAt);
+                return payload;
+            } catch(e) {
+                const ignored = { ts: String(candidate.ts), reason: String(e && e.message || e) };
+                validationIgnored.push(ignored);
+                console.warn('[Yople Startup Cloud Backup Ignored]', ignored);
+            }
         }
-        const data = await res.json();
-        const isBackup = isYokiBackupRecord(data, latest.path);
-        console.log('CLOUD_BACKUP_FOUND', isBackup);
-        if(!isBackup) return null;
-        const payload = normalizeBackupPayload(data, 'cloud', latest.ts, latest.path, latest.index);
-        console.log('CLOUD_BACKUP_UPDATED_AT', payload.updatedAt);
-        return payload;
+        window.__YOPLE_STARTUP_CLOUD_IGNORED__ = [...rejected, ...validationIgnored];
+        console.log('CLOUD_BACKUP_FOUND', false);
+        return null;
     }
 
     function normalizeBackupPayload(raw = {}, source = 'backup', ts = raw && raw.timestamp, path = FIREBASE_BACKUP_PATH, index = {}) {
@@ -4917,18 +4933,93 @@
         return merged;
     }
 
-    function selectSafeBackupIndexRecord(indexData = {}) {
+    function getStatsSyncMetrics(stats = {}) {
+        const values = Object.values(stats || {}).filter(stat => stat && typeof stat === 'object');
+        return {
+            statsCount: Object.keys(stats || {}).length,
+            historyTotal: values.reduce((sum, stat) => sum + (Array.isArray(stat.history) ? stat.history.length : 0), 0),
+            fsrsRepsTotal: values.reduce((sum, stat) => sum + Math.max(0, Number(stat && stat.fsrs && stat.fsrs.reps) || 0), 0),
+            lastLearningAt: values.reduce((latest, stat) => Math.max(latest, getStatLatestTime(stat)), 0)
+        };
+    }
+
+    function choosePreferredStat(localStat, cloudStat) {
+        if(!localStat) return { winner: 'cloud', stat: cloneStatsForDirectMatch(cloudStat) };
+        if(!cloudStat) return { winner: 'local', stat: cloneStatsForDirectMatch(localStat) };
+        const localTime = getStatLatestTime(localStat), cloudTime = getStatLatestTime(cloudStat);
+        const localHistory = Array.isArray(localStat.history) ? localStat.history.length : 0;
+        const cloudHistory = Array.isArray(cloudStat.history) ? cloudStat.history.length : 0;
+        const localReps = Math.max(0, Number(localStat.fsrs && localStat.fsrs.reps) || 0);
+        const cloudReps = Math.max(0, Number(cloudStat.fsrs && cloudStat.fsrs.reps) || 0);
+        const cloudWins = cloudTime > localTime || (cloudTime === localTime && (cloudHistory > localHistory || (cloudHistory === localHistory && cloudReps > localReps)));
+        return { winner: cloudWins ? 'cloud' : 'local', stat: cloneStatsForDirectMatch(cloudWins ? cloudStat : localStat) };
+    }
+
+    function mergeStartupStatsSafely(localStats = {}, cloudStats = {}) {
+        const merged = {}, ids = new Set([...Object.keys(localStats || {}), ...Object.keys(cloudStats || {})]);
+        let localContribution = false, cloudContribution = false;
+        ids.forEach(cardId => {
+            const localStat = localStats[cardId], cloudStat = cloudStats[cardId];
+            if(localStat && cloudStat && stableStringify(localStat) === stableStringify(cloudStat)) {
+                merged[cardId] = cloneStatsForDirectMatch(localStat);
+                return;
+            }
+            const preferred = choosePreferredStat(localStat, cloudStat);
+            if(preferred.winner === 'local') localContribution = true; else cloudContribution = true;
+            const result = preferred.stat;
+            if(localStat && cloudStat) {
+                const mergedHistory = mergeStatsHistory(localStat, cloudStat);
+                if(mergedHistory) result.history = mergedHistory;
+                const localHistoryLength = Array.isArray(localStat.history) ? localStat.history.length : 0;
+                const cloudHistoryLength = Array.isArray(cloudStat.history) ? cloudStat.history.length : 0;
+                if(mergedHistory && mergedHistory.length > localHistoryLength) cloudContribution = true;
+                if(mergedHistory && mergedHistory.length > cloudHistoryLength) localContribution = true;
+                const maxReps = Math.max(Number(localStat.fsrs && localStat.fsrs.reps) || 0, Number(cloudStat.fsrs && cloudStat.fsrs.reps) || 0);
+                if(maxReps > 0) result.fsrs = { ...(result.fsrs || {}), reps: maxReps };
+                if(maxReps > (Number(localStat.fsrs && localStat.fsrs.reps) || 0)) cloudContribution = true;
+                if(maxReps > (Number(cloudStat.fsrs && cloudStat.fsrs.reps) || 0)) localContribution = true;
+            }
+            merged[cardId] = result;
+        });
+        return { stats: merged, localContribution, cloudContribution };
+    }
+
+    function metricsDoNotDecrease(candidate, baseline) {
+        return candidate.statsCount >= baseline.statsCount && candidate.historyTotal >= baseline.historyTotal && candidate.fsrsRepsTotal >= baseline.fsrsRepsTotal;
+    }
+
+    function decideStartupStats(localStats = {}, cloudStats = {}) {
+        const localMetrics = getStatsSyncMetrics(localStats), cloudMetrics = getStatsSyncMetrics(cloudStats);
+        if(!cloudMetrics.statsCount) return { action: 'local', reason: 'cloud-empty', stats: localStats, localMetrics, cloudMetrics };
+        if(!localMetrics.statsCount) return { action: 'cloud', reason: 'local-empty', stats: cloudStats, localMetrics, cloudMetrics };
+        const merged = mergeStartupStatsSafely(localStats, cloudStats);
+        const mergedMetrics = getStatsSyncMetrics(merged.stats);
+        if(!metricsDoNotDecrease(mergedMetrics, localMetrics) || !metricsDoNotDecrease(mergedMetrics, cloudMetrics)) {
+            return { action: 'local', reason: 'decrease-guard', stats: localStats, localMetrics, cloudMetrics, mergedMetrics };
+        }
+        if(merged.localContribution && merged.cloudContribution) return { action: 'merge', reason: 'uuid-divergence', stats: merged.stats, localMetrics, cloudMetrics, mergedMetrics };
+        if(merged.cloudContribution && !merged.localContribution) return { action: 'cloud', reason: cloudMetrics.lastLearningAt >= localMetrics.lastLearningAt ? 'cloud-newer' : 'cloud-only-data', stats: merged.stats, localMetrics, cloudMetrics, mergedMetrics };
+        return { action: 'local', reason: localMetrics.lastLearningAt >= cloudMetrics.lastLearningAt ? 'local-newer' : 'local-safer', stats: localStats, localMetrics, cloudMetrics, mergedMetrics };
+    }
+
+    function getSafeBackupIndexRecords(indexData = {}) {
         const entries = Object.entries(indexData || {});
-        const largestStatsCount = Math.max(0, ...entries.map(([, item]) => Number(item && item.statsKeyCount) || 0));
-        const safeEntries = entries
-            .filter(([, item]) => {
-                const count = Number(item && item.statsKeyCount) || 0;
-                return count > 0 && (largestStatsCount < 100 || count >= largestStatsCount * 0.5);
-            })
-            .sort(([a], [b]) => Number(b) - Number(a));
-        if (!safeEntries.length) return null;
-        const [ts, index] = safeEntries[0];
-        return { ts, path: FIREBASE_BACKUP_PATH, index, source: 'validated-index', largestStatsCount };
+        const largestStatsCount = Math.max(0, ...entries.map(([, item]) => Number(item && (item.statsKeyCount || item.statsCount)) || 0));
+        const candidates = [], rejected = [];
+        entries.sort(([a], [b]) => Number(b) - Number(a)).forEach(([ts, index]) => {
+            const count = Number(index && (index.statsKeyCount || index.statsCount)) || 0;
+            let reason = '';
+            if(!count) reason = 'empty-backup';
+            else if(Number(index && index.schemaVersion) && Number(index.schemaVersion) !== BACKUP_SCHEMA_VERSION) reason = 'schema-mismatch';
+            else if(largestStatsCount >= 100 && (count < largestStatsCount * 0.5 || largestStatsCount - count >= Math.max(100, largestStatsCount * 0.5))) reason = 'rapid-stats-drop';
+            if(reason) rejected.push({ ts: String(ts), reason });
+            else candidates.push({ ts, path: FIREBASE_BACKUP_PATH, index: index || {}, source: 'validated-index', largestStatsCount });
+        });
+        return { candidates, rejected, largestStatsCount };
+    }
+
+    function selectSafeBackupIndexRecord(indexData = {}) {
+        return getSafeBackupIndexRecords(indexData).candidates[0] || null;
     }
 
     async function getLatestYokiBackupIndexRecord() {
@@ -4950,27 +5041,32 @@
         try {
             console.log('AUTO_SYNC_START');
             const localState = loadLocalStudyState();
-            const latest = await getLatestYokiBackupIndexRecord();
-            const localUpdatedAt = Number(localState && localState.updatedAt) || 0;
-            const cloudUpdatedAt = Number(latest && latest.index && (latest.index.localUpdatedAt || latest.index.timestamp || latest.index.createdAt)) || Number(latest && latest.ts) || 0;
-            console.log(`LOCAL_UPDATED_AT ${localUpdatedAt}`);
-            console.log(`CLOUD_UPDATED_AT ${cloudUpdatedAt}`);
-            if (!latest || !latest.ts) {
+            const cloudState = await loadCloudStudyState();
+            const ignored = window.__YOPLE_STARTUP_CLOUD_IGNORED__ || [];
+            const decision = decideStartupStats(localState.stats || {}, cloudState && cloudState.stats || {});
+            window.__YOPLE_STARTUP_SYNC_DECISION__ = { action: decision.action, reason: decision.reason, localMetrics: decision.localMetrics, cloudMetrics: decision.cloudMetrics, mergedMetrics: decision.mergedMetrics || null, ignored };
+            console.log('[Yople Startup Sync Comparison]', { local: decision.localMetrics, cloud: decision.cloudMetrics, merged: decision.mergedMetrics || null, ignored });
+            console.log('[Yople Startup Sync Decision]', { action: decision.action, reason: decision.reason });
+            if(decision.action === 'cloud' && cloudState) {
+                applyRestoredState({ ...cloudState, stats: decision.stats }, 'auto-cloud');
+                await saveStatsToIndexedDBFallback(decision.stats);
+                setStorageItem(STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT, String(Date.now()));
+                showToast('더 최신인 클라우드 학습 데이터를 복원했습니다.', 'success');
+            } else if(decision.action === 'merge' && cloudState) {
+                const mergedReviewHistory = mergeHistoryByCardId(localState.reviewHistory || {}, cloudState.reviewHistory || {});
+                setItemSafe(STORAGE_KEY_STATS, JSON.stringify(decision.stats));
+                setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(mergedReviewHistory));
+                await saveStatsToIndexedDBFallback(decision.stats);
+                markLocalDataUpdated(Math.max(decision.localMetrics.lastLearningAt, decision.cloudMetrics.lastLearningAt));
+                showToast('로컬과 클라우드 학습 데이터를 안전하게 병합했습니다.', 'success');
+            } else {
                 restorePosition(localState.viewState || {}, 'local');
-                logStudyStateSnapshot('auto-sync-local', localState);
-                console.log('AUTO_SYNC_SOURCE local');
-                console.log('AUTO_SYNC_APPLIED', false);
-                console.log('AUTO_SYNC_COMPLETE');
-                return;
             }
-            console.log('AUTO_SYNC_SOURCE cloud');
-            await restoreFromFirebase(latest.ts, true, latest.path || FIREBASE_BACKUP_PATH);
-            const syncAppliedAt = Date.now();
-            setStorageItem(STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT, String(syncAppliedAt));
-            console.log('AUTO_SYNC_APPLIED', true);
+            if(ignored.length) showToast(`손상되거나 안전하지 않은 클라우드 백업 ${ignored.length}개를 무시했습니다.`, 'warning');
+            console.log('AUTO_SYNC_SOURCE', decision.action);
+            console.log('AUTO_SYNC_APPLIED', decision.action === 'cloud' || decision.action === 'merge');
             console.log('AUTO_SYNC_COMPLETE');
-            logStudyStateSnapshot('auto-sync-cloud', loadLocalStudyState());
-            showToast('최신 클라우드 데이터 동기화 완료', 'success');
+            return decision;
         } catch(e) {
             console.error('[Yople Auto Cloud Sync Error]', e);
             console.log('AUTO_SYNC_SOURCE local');
