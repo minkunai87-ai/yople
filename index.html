@@ -531,7 +531,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.22.3 - 핀 이동 강조';
+    const APP_VERSION = 'Yople v11.22.4 - 해시 GUID 카드 복구';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -2856,7 +2856,8 @@
         let statsMigrated = false;
         
         rows.forEach((fields, rowIndex) => {
-            if (fields.length > 0 && String(fields[0] || '').startsWith('#')) return;
+            // Anki metadata rows are single-field # directives. A real GUID may also begin with #.
+            if (fields.length === 1 && String(fields[0] || '').startsWith('#')) return;
             const parsed = parseYokiRow(fields, deck);
             if(!parsed || !parsed.q) return;
             const originalOrder = normalizeOriginalOrder(fields.at(-1));
