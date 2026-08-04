@@ -158,6 +158,9 @@
     .pin-image-toolbar { position: relative; z-index: 12; display: flex; justify-content: flex-end; gap: 5px; margin: 0 2px 5px; }
     .pin-image-btn { border: 1px solid var(--border); border-radius: 7px; background: var(--input-bg); color: var(--text-sub); padding: 4px 7px; font-size: 0.72rem; line-height: 1.15; cursor: pointer; touch-action: manipulation; }
     .pin-image-btn:active, .pin-image-btn.active { color: var(--primary); border-color: var(--primary); background: var(--btn-hover); }
+    .image-pin-floating-hit { position: fixed; right: 12px; bottom: calc(92px + env(safe-area-inset-bottom)); z-index: 9000; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; touch-action: manipulation; }
+    .image-pin-floating-label { display: inline-block; box-sizing: border-box; white-space: nowrap; border: 1px solid var(--border); border-radius: 7px; background: rgba(0,0,0,0.72); color: #fff; padding: 4px 7px; font-size: 0.72rem; line-height: 1.15; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); pointer-events: none; }
+    .image-pin-floating-hit:active .image-pin-floating-label { color: var(--primary); border-color: var(--primary); }
     .pin-image-stage { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 8px; overflow: hidden; font-size: 0.72rem; }
     .pin-image-stage > img { margin: 0 auto; }
     .pin-image-stage.pin-placement { cursor: crosshair; outline: 2px dashed var(--primary); outline-offset: 3px; touch-action: manipulation; }
@@ -525,7 +528,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.21.1 - 미니 핀 마커';
+    const APP_VERSION = 'Yople v11.22.0 - 다중 이미지 핀';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3722,6 +3725,7 @@
     }
 
     function showCard() {
+        document.querySelectorAll('.image-pin-floating-hit').forEach(button => button.remove());
         resetZoom(); if(!activeDeck.length) { reviewTimingState = null; document.getElementById('question-section').innerHTML="<h3 style='text-align:center;'>카드가 없습니다.</h3>"; return; }
         const card = activeDeck[currentIndex]; const s = getStats(card);
         beginReviewTiming(card);
@@ -3741,15 +3745,30 @@
     function normalizeImagePins(value) {
         const parsed = parseJSONSafe(value, {});
         const result = {};
-        Object.entries(parsed || {}).forEach(([cardUuid, pin]) => {
-            const x = Number(pin && pin.x), y = Number(pin && pin.y);
-            if(!cardUuid || !Number.isFinite(x) || !Number.isFinite(y)) return;
-            result[String(cardUuid)] = { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
+        Object.entries(parsed || {}).forEach(([cardUuid, record]) => {
+            if(!cardUuid) return;
+            const sourcePins = Array.isArray(record && record.pins) ? record.pins : (Array.isArray(record) ? record : [record]);
+            const pins = sourcePins.map(pin => {
+                const x = Number(pin && pin.x), y = Number(pin && pin.y);
+                if(!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                return { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
+            }).filter(Boolean);
+            if(!pins.length) return;
+            result[String(cardUuid)] = {
+                cardUuid: String(cardUuid),
+                pins,
+                updatedAt: Math.max(Number(record && record.updatedAt) || 0, ...pins.map(pin => pin.updatedAt || 0))
+            };
         });
         return result;
     }
 
-    function getImagePins() { return normalizeImagePins(getStorageItem(STORAGE_KEY_IMAGE_PINS)); }
+    function getImagePins() {
+        const raw = getStorageItem(STORAGE_KEY_IMAGE_PINS), normalized = normalizeImagePins(raw);
+        const parsed = parseJSONSafe(raw, {});
+        if(raw && JSON.stringify(parsed) !== JSON.stringify(normalized)) setStorageItem(STORAGE_KEY_IMAGE_PINS, JSON.stringify(normalized));
+        return normalized;
+    }
     function refreshCurrentImagePinControls() {
         document.querySelectorAll('.pin-image-block[data-card-uuid]').forEach(block => {
             if(typeof block._syncImagePinButtons === 'function') block._syncImagePinButtons();
@@ -3803,11 +3822,17 @@
         marker.style.top = `${img.offsetTop + getObjectPositionOffset(style.objectPosition, boxHeight - contentHeight, 1) + contentHeight * pin.y / 100}px`;
     }
 
+    function renderImagePins(stage, img, pins = []) {
+        stage.querySelectorAll('.image-pin-marker').forEach(marker => marker.remove());
+        return pins.map((pin, index) => {
+            const marker = document.createElement('span');
+            marker.className = 'image-pin-marker'; marker.textContent = '📍'; marker.dataset.pinIndex = String(index);
+            stage.appendChild(marker); positionImagePin(stage, img, marker, pin); return marker;
+        });
+    }
+
     function renderImagePin(stage, img, pin) {
-        let marker = stage.querySelector('.image-pin-marker');
-        if(!pin) { if(marker) marker.remove(); return null; }
-        if(!marker) { marker = document.createElement('span'); marker.className = 'image-pin-marker'; marker.textContent = '📍'; stage.appendChild(marker); }
-        positionImagePin(stage, img, marker, pin); return marker;
+        return renderImagePins(stage, img, pin ? [pin] : [])[0] || null;
     }
 
     function getBottomReferenceImageIdentity(card) {
@@ -3832,7 +3857,7 @@
     function getPreviousReferencePin(card, pins = getImagePins()) {
         const previousCard = getPreviousCardByNumberOrder(card);
         if(!previousCard) return null;
-        const pin = pins[String(previousCard.id)];
+        const record = pins[String(previousCard.id)], pin = record && record.pins && record.pins[record.pins.length - 1];
         if(!pin) return null;
         const currentImage = getBottomReferenceImageIdentity(card);
         const previousImage = getBottomReferenceImageIdentity(previousCard);
@@ -3840,10 +3865,17 @@
         return { pin, card: previousCard };
     }
 
-    function scrollToImagePin(stage, img, pin, showMarker = true) {
-        const marker = showMarker ? renderImagePin(stage, img, pin) : document.createElement('span');
+    function scrollToImagePin(stage, img, pin, showMarker = true, pinIndex = -1) {
+        if(showMarker) {
+            const cardUuid = stage.closest('.pin-image-block')?.dataset.cardUuid;
+            const record = cardUuid && getImagePins()[cardUuid];
+            renderImagePins(stage, img, record && record.pins || []);
+        }
+        let marker = showMarker && pinIndex >= 0 ? stage.querySelector(`.image-pin-marker[data-pin-index="${pinIndex}"]`) : null;
+        if(!marker) marker = document.createElement('span');
         if(!marker) return;
-        if(!showMarker) { marker.className = 'pin-reference-anchor'; marker.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;'; stage.appendChild(marker); positionImagePin(stage, img, marker, pin); }
+        const temporaryMarker = !marker.isConnected;
+        if(temporaryMarker) { marker.className = 'pin-reference-anchor'; marker.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;'; stage.appendChild(marker); positionImagePin(stage, img, marker, pin); }
         const block = stage.closest('.pin-image-block');
         let spacer = block && block.querySelector(':scope > .pin-scroll-spacer');
         if(block && !spacer) { spacer = document.createElement('div'); spacer.className = 'pin-scroll-spacer'; block.appendChild(spacer); }
@@ -3851,7 +3883,7 @@
         marker.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
         const markerRect = marker.getBoundingClientRect(), viewportRect = scrollContainer.getBoundingClientRect();
         scrollContainer.scrollTop += (markerRect.top + markerRect.height / 2) - (viewportRect.top + viewportRect.height / 2);
-        if(!showMarker) marker.remove();
+        if(temporaryMarker) marker.remove();
     }
 
     function attachImagePinControls(card, questionRoot, answerRoot) {
@@ -3860,21 +3892,25 @@
         if(!img || !card || !card.id) return;
         const cardUuid = String(card.id), block = document.createElement('div'), toolbar = document.createElement('div');
         block.className = 'pin-image-block'; block.dataset.cardUuid = cardUuid; toolbar.className = 'pin-image-toolbar';
-        const addButton = document.createElement('button'), moveButton = document.createElement('button');
-        addButton.type = moveButton.type = 'button'; addButton.className = moveButton.className = 'pin-image-btn';
-        addButton.textContent = '📍+'; moveButton.textContent = '📍이동';
-        addButton.title = '저장 위치로 이동 후 좌표 수정'; moveButton.title = '저장된 위치로 이동';
-        toolbar.append(addButton);
+        const addButton = document.createElement('button'), moveButton = document.createElement('button'), moveLabel = document.createElement('span');
+        addButton.type = moveButton.type = 'button'; addButton.className = 'pin-image-btn'; moveButton.className = 'image-pin-floating-hit'; moveLabel.className = 'image-pin-floating-label';
+        addButton.textContent = '📍+'; moveLabel.textContent = '📍이동'; moveButton.appendChild(moveLabel);
+        addButton.title = '마지막 저장 위치로 이동 후 좌표 추가'; moveButton.title = '저장된 위치로 이동'; toolbar.append(addButton);
+        let nextMoveIndex = 0;
         const syncMoveButton = () => {
-            const hasPin = !!getImagePins()[cardUuid];
-            if(hasPin && !moveButton.isConnected) toolbar.appendChild(moveButton);
-            else if(!hasPin && moveButton.isConnected) moveButton.remove();
+            const record = getImagePins()[cardUuid], count = record && record.pins ? record.pins.length : 0;
+            if(nextMoveIndex >= count) nextMoveIndex = 0;
+            moveLabel.textContent = count > 1 ? `📍 ${nextMoveIndex + 1}/${count}` : '📍이동';
+            if(count && !moveButton.isConnected) document.body.appendChild(moveButton);
+            else if(!count && moveButton.isConnected) moveButton.remove();
         };
         block._syncImagePinButtons = syncMoveButton;
-        syncMoveButton();
         const stage = document.createElement('div'); stage.className = 'pin-image-stage';
-        img.parentNode.insertBefore(block, img); block.append(toolbar, stage); stage.appendChild(img);
-        const refreshMarker = () => { const pin = getImagePins()[cardUuid]; if(pin && img.isConnected) renderImagePin(stage, img, pin); };
+        img.parentNode.insertBefore(block, img); block.append(toolbar, stage); stage.appendChild(img); syncMoveButton();
+        const refreshMarker = () => {
+            const record = getImagePins()[cardUuid];
+            if(img.isConnected) renderImagePins(stage, img, record && record.pins || []);
+        };
         if(img.complete) refreshMarker(); else img.addEventListener('load', refreshMarker, { once: true });
         if(typeof ResizeObserver !== 'undefined') new ResizeObserver(refreshMarker).observe(img);
 
@@ -3883,29 +3919,66 @@
             if(stage.classList.contains('pin-placement')) {
                 stage.classList.remove('pin-placement'); addButton.classList.remove('active'); showToast('좌표 수정을 취소했습니다.'); return;
             }
-            const pins = getImagePins(), pin = pins[cardUuid];
-            const previousReference = pin ? null : getPreviousReferencePin(card, pins);
-            if(pin) scrollToImagePin(stage, img, pin, true);
+            const allPins = getImagePins(), record = allPins[cardUuid], pin = record && record.pins && record.pins[record.pins.length - 1];
+            const previousReference = pin ? null : getPreviousReferencePin(card, allPins);
+            if(pin) scrollToImagePin(stage, img, pin, true, record.pins.length - 1);
             else if(previousReference) scrollToImagePin(stage, img, previousReference.pin, false);
             stage.classList.add('pin-placement'); addButton.classList.add('active');
-            showToast(pin ? '기존 위치입니다. 새 위치를 선택하세요.' : (previousReference ? '직전 문제 위치를 참고해 새 위치를 선택하세요.' : '하단 이미지에서 위치를 선택하세요.'));
+            showToast(pin ? '기존 마지막 위치입니다. 새 위치를 추가하세요.' : (previousReference ? '직전 문제의 마지막 위치를 참고해 새 위치를 선택하세요.' : '하단 이미지에서 위치를 선택하세요.'));
         });
+
+        let suppressPlacementClickUntil = 0, longPressTimer = null, longPressStart = null;
+        const cancelLongPress = () => { if(longPressTimer) clearTimeout(longPressTimer); longPressTimer = null; longPressStart = null; };
+        const findPinNearPoint = (clientX, clientY) => {
+            let nearest = null, nearestDistance = Infinity;
+            stage.querySelectorAll('.image-pin-marker').forEach(marker => {
+                const rect = marker.getBoundingClientRect(), distance = Math.hypot(clientX - (rect.left + rect.width / 2), clientY - (rect.top + rect.height / 2));
+                if(distance <= 22 && distance < nearestDistance) { nearest = Number(marker.dataset.pinIndex); nearestDistance = distance; }
+            });
+            return nearest;
+        };
+        stage.addEventListener('pointerdown', e => {
+            if(stage.classList.contains('pin-placement') || e.button > 0) return;
+            const pinIndex = findPinNearPoint(e.clientX, e.clientY);
+            if(pinIndex === null) return;
+            longPressStart = { x: e.clientX, y: e.clientY, pinIndex };
+            longPressTimer = setTimeout(() => {
+                const targetIndex = longPressStart && longPressStart.pinIndex; cancelLongPress();
+                if(targetIndex === null || targetIndex === undefined || !confirm('삭제하시겠습니까?')) return;
+                const stored = getImagePins(), record = stored[cardUuid];
+                if(!record || !record.pins[targetIndex]) return;
+                record.pins.splice(targetIndex, 1);
+                const changedAt = Date.now();
+                if(record.pins.length) record.updatedAt = changedAt; else delete stored[cardUuid];
+                nextMoveIndex = 0; setImagePins(stored); refreshMarker(); suppressPlacementClickUntil = Date.now() + 700;
+                markLocalDataUpdated(changedAt); scheduleBackup('image-pin-delete'); showToast('좌표를 삭제했습니다.', 'success');
+            }, 650);
+        });
+        stage.addEventListener('pointermove', e => {
+            if(longPressStart && Math.hypot(e.clientX - longPressStart.x, e.clientY - longPressStart.y) > 8) cancelLongPress();
+        });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => stage.addEventListener(type, cancelLongPress));
+
         stage.addEventListener('click', e => {
+            if(Date.now() < suppressPlacementClickUntil) { e.preventDefault(); e.stopPropagation(); return; }
             if(!stage.classList.contains('pin-placement')) return;
             e.preventDefault(); e.stopPropagation();
             const metrics = getImageContentMetrics(img), rect = metrics.rect;
-            if(!rect.width || !rect.height || e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
-            const pins = getImagePins();
-            pins[cardUuid] = { x: Math.min(100, Math.max(0, (e.clientX - metrics.left) / metrics.contentWidth * 100)), y: Math.min(100, Math.max(0, (e.clientY - metrics.top) / metrics.contentHeight * 100)), updatedAt: Date.now() };
-            setImagePins(pins); renderImagePin(stage, img, pins[cardUuid]);
+            if(!rect.width || !rect.height || e.clientX < metrics.left || e.clientX > metrics.left + metrics.contentWidth || e.clientY < metrics.top || e.clientY > metrics.top + metrics.contentHeight) return;
+            const stored = getImagePins(), changedAt = Date.now(), record = stored[cardUuid] || { cardUuid, pins: [], updatedAt: changedAt };
+            record.pins.push({ x: Math.min(100, Math.max(0, (e.clientX - metrics.left) / metrics.contentWidth * 100)), y: Math.min(100, Math.max(0, (e.clientY - metrics.top) / metrics.contentHeight * 100)), updatedAt: changedAt });
+            record.updatedAt = changedAt; stored[cardUuid] = record; nextMoveIndex = 0;
+            setImagePins(stored); renderImagePins(stage, img, record.pins);
             stage.classList.remove('pin-placement'); addButton.classList.remove('active');
-            markLocalDataUpdated(pins[cardUuid].updatedAt); scheduleBackup('image-pin'); showToast('📍 위치를 저장했습니다.', 'success');
+            markLocalDataUpdated(changedAt); scheduleBackup('image-pin'); showToast('📍 위치를 추가했습니다.', 'success');
         });
         moveButton.addEventListener('click', e => {
             e.preventDefault(); e.stopPropagation();
-            const pin = getImagePins()[cardUuid];
-            if(!pin) { showToast('먼저 📍+로 위치를 지정하세요.'); return; }
-            scrollToImagePin(stage, img, pin);
+            const record = getImagePins()[cardUuid], pins = record && record.pins || [];
+            if(!pins.length) { moveButton.remove(); return; }
+            const targetIndex = Math.min(nextMoveIndex, pins.length - 1);
+            scrollToImagePin(stage, img, pins[targetIndex], true, targetIndex);
+            nextMoveIndex = (targetIndex + 1) % pins.length; syncMoveButton();
         });
     }
 
