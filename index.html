@@ -162,7 +162,7 @@
     .pin-image-stage > img { margin: 0 auto; }
     .pin-image-stage.pin-placement { cursor: crosshair; outline: 2px dashed var(--primary); outline-offset: 3px; touch-action: manipulation; }
     .image-pin-marker { position: absolute; font-size: 1em; line-height: 1; transform: translate(-50%, -50%); pointer-events: none; z-index: 8; }
-    @media (max-width: 390px) { .image-pin-marker { font-size: 0.85em; } }
+    @media (max-width: 390px) { .image-pin-marker { font-size: 0.5em; } }
 
     .divider { display: none; border: 0; border-top: 2px dashed var(--border); margin: 15px 0; position: relative; }
     .divider::after { content: "정답"; position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; color: var(--text-sub); font-size: 0.8rem; font-weight: bold; }
@@ -525,7 +525,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.21.0 - 안전 시작 동기화';
+    const APP_VERSION = 'Yople v11.21.1 - 미니 핀 마커';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
