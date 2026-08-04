@@ -154,6 +154,14 @@
     img { border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); max-width: 100% !important; height: auto !important; display: block; margin: 10px auto; }
     .media-zoom-target { transition: transform 0.18s ease; will-change: transform; touch-action: pan-y; }
     .media-zoom-target.is-media-zoomed { position: relative; z-index: 5; touch-action: none; }
+    .pin-image-block { width: 100%; margin: 10px auto; }
+    .pin-image-toolbar { position: relative; z-index: 12; display: flex; justify-content: flex-end; gap: 5px; margin: 0 2px 5px; }
+    .pin-image-btn { border: 1px solid var(--border); border-radius: 7px; background: var(--input-bg); color: var(--text-sub); padding: 4px 7px; font-size: 0.72rem; line-height: 1.15; cursor: pointer; touch-action: manipulation; }
+    .pin-image-btn:active, .pin-image-btn.active { color: var(--primary); border-color: var(--primary); background: var(--btn-hover); }
+    .pin-image-stage { position: relative; display: block; width: fit-content; max-width: 100%; margin: 0 auto; border-radius: 8px; overflow: hidden; }
+    .pin-image-stage > img { margin: 0 auto; }
+    .pin-image-stage.pin-placement { cursor: crosshair; outline: 2px dashed var(--primary); outline-offset: 3px; touch-action: manipulation; }
+    .image-pin-marker { position: absolute; font-size: 0.72rem; line-height: 1; transform: translate(-50%, -50%); pointer-events: none; z-index: 8; }
 
     .divider { display: none; border: 0; border-top: 2px dashed var(--border); margin: 15px 0; position: relative; }
     .divider::after { content: "정답"; position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--surface); padding: 0 10px; color: var(--text-sub); font-size: 0.8rem; font-weight: bold; }
@@ -516,7 +524,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.19.7 - Firebase GUID 백업';
+    const APP_VERSION = 'Yople v11.20.0 - 이미지 좌표 핀';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -578,6 +586,7 @@
     const STORAGE_KEY_SEARCH_QUERY = 'yople_search_query';
     const STORAGE_KEY_TARGET_RETENTION = 'yople_target_retention';
     const STORAGE_KEY_NOTES = 'yople_notes_by_card_uuid_v1';
+    const STORAGE_KEY_IMAGE_PINS = 'yople_image_pins_by_card_uuid_v1';
     const STORAGE_KEY_LAST_SYNC_TIME = 'yople_last_sync_time';
     const STORAGE_KEY_RESTORE_PENDING = 'yople_restore_pending';
     const STORAGE_KEY_MIGRATION_DONE = 'yople_storage_migration_v1_done';
@@ -1437,6 +1446,8 @@
 
     function getMediaZoomTarget(node) {
         if (!node || !node.closest) return null;
+        const pinStage = node.closest('.pin-image-stage');
+        if (pinStage) return pinStage;
         const ioWrapper = node.closest('.mk-io-wrapper');
         if (ioWrapper) return ioWrapper;
         const img = node.closest('img');
@@ -1483,6 +1494,7 @@
 
             wrapper.addEventListener('touchstart', e => {
                 e.stopPropagation();
+                if (wrapper.classList.contains('pin-placement') && e.touches.length === 1) return;
                 if (e.touches.length === 2) {
                     e.preventDefault();
                     const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -1750,6 +1762,7 @@
             STORAGE_KEY_FILTER_STATE, STORAGE_KEY_CURRENT_CARD_ID, STORAGE_KEY_VIEW_STATE,
             STORAGE_KEY_LOCAL_EDITS, STORAGE_KEY_RECENT_DECKS, STORAGE_KEY_DECK_VIEW_STATES,
             STORAGE_KEY_SEARCH_QUERY, STORAGE_KEY_TARGET_RETENTION, STORAGE_KEY_NOTES,
+            STORAGE_KEY_IMAGE_PINS,
             STORAGE_KEY_REVIEW_HISTORY, REVIEW_DURATION_STORAGE_KEY
         ];
         return Object.fromEntries(keys.map(key => [key, getStorageItem(key)]).filter(([, value]) => value !== null));
@@ -1805,6 +1818,7 @@
             stats: encodeUuidKeyedObject(backupStats),
             reviewHistory: encodeUuidKeyedObject(parseJSONSafe(getStorageItem(STORAGE_KEY_REVIEW_HISTORY), {})),
             notesByCardUuid: encodeUuidKeyedObject(getNotesByCardUuid()),
+            imagePinsByCardUuid: encodeUuidKeyedObject(getImagePins()),
             storage: getBackupStorageSnapshot(),
             progress: getStorageItem(STORAGE_KEY_PROGRESS) || '{}',
             filter: getStorageItem(STORAGE_KEY_FILTER_STATE) || '{}',
@@ -1881,6 +1895,7 @@
             stats: data.stats,
             reviewHistory: data.reviewHistory,
             notesByCardUuid: data.notesByCardUuid,
+            imagePinsByCardUuid: data.imagePinsByCardUuid,
             storage: data.storage,
             progress: data.progress,
             filter: data.filter,
@@ -3714,11 +3729,133 @@
         updateNoteButtonState();
         const qDiv = document.getElementById('question-section'); qDiv.innerHTML = ''; qDiv.appendChild(createDOM(card.q, false));
         const aDiv = document.getElementById('answer-section'); aDiv.innerHTML = ''; aDiv.appendChild(createDOM(card.a, true));
+        attachImagePinControls(card, qDiv, aDiv);
         bindImageZoomHandlers(qDiv);
         bindImageZoomHandlers(aDiv);
         aDiv.style.display = 'none'; document.getElementById('divider').style.display = 'none';
         document.getElementById('click-guide').style.display = 'block'; document.getElementById('grade-area').style.display = 'none';
         document.getElementById('nav-area').style.display = 'flex'; scrollContainer.scrollTop = 0;
+    }
+
+    function normalizeImagePins(value) {
+        const parsed = parseJSONSafe(value, {});
+        const result = {};
+        Object.entries(parsed || {}).forEach(([cardUuid, pin]) => {
+            const x = Number(pin && pin.x), y = Number(pin && pin.y);
+            if(!cardUuid || !Number.isFinite(x) || !Number.isFinite(y)) return;
+            result[String(cardUuid)] = { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
+        });
+        return result;
+    }
+
+    function getImagePins() { return normalizeImagePins(getStorageItem(STORAGE_KEY_IMAGE_PINS)); }
+    function setImagePins(pins) { setStorageItem(STORAGE_KEY_IMAGE_PINS, JSON.stringify(normalizeImagePins(pins))); }
+
+    function getObjectPositionOffset(value, freeSpace, axis) {
+        const parts = String(value || '50% 50%').trim().split(/\s+/);
+        let token = parts[axis] || parts[0] || '50%';
+        if(token === 'left' || token === 'top') token = '0%';
+        else if(token === 'right' || token === 'bottom') token = '100%';
+        else if(token === 'center') token = '50%';
+        if(token.endsWith('%')) return freeSpace * (parseFloat(token) || 0) / 100;
+        if(token.endsWith('px')) return parseFloat(token) || 0;
+        return freeSpace / 2;
+    }
+
+    function getImageContentMetrics(img) {
+        const rect = img.getBoundingClientRect();
+        const naturalWidth = img.naturalWidth || rect.width || 1, naturalHeight = img.naturalHeight || rect.height || 1;
+        const style = getComputedStyle(img), fit = style.objectFit || 'fill';
+        let contentWidth = rect.width, contentHeight = rect.height;
+        if(fit !== 'fill') {
+            const containScale = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+            const coverScale = Math.max(rect.width / naturalWidth, rect.height / naturalHeight);
+            let imageScale = fit === 'cover' ? coverScale : (fit === 'none' ? 1 : containScale);
+            if(fit === 'scale-down') imageScale = Math.min(1, containScale);
+            contentWidth = naturalWidth * imageScale; contentHeight = naturalHeight * imageScale;
+        }
+        return { rect, contentWidth, contentHeight, left: rect.left + getObjectPositionOffset(style.objectPosition, rect.width - contentWidth, 0), top: rect.top + getObjectPositionOffset(style.objectPosition, rect.height - contentHeight, 1) };
+    }
+
+    function positionImagePin(stage, img, marker, pin) {
+        const style = getComputedStyle(img), boxWidth = img.clientWidth, boxHeight = img.clientHeight;
+        const naturalWidth = img.naturalWidth || boxWidth || 1, naturalHeight = img.naturalHeight || boxHeight || 1;
+        const fit = style.objectFit || 'fill';
+        let contentWidth = boxWidth, contentHeight = boxHeight;
+        if(fit !== 'fill') {
+            const containScale = Math.min(boxWidth / naturalWidth, boxHeight / naturalHeight);
+            const coverScale = Math.max(boxWidth / naturalWidth, boxHeight / naturalHeight);
+            let imageScale = fit === 'cover' ? coverScale : (fit === 'none' ? 1 : containScale);
+            if(fit === 'scale-down') imageScale = Math.min(1, containScale);
+            contentWidth = naturalWidth * imageScale; contentHeight = naturalHeight * imageScale;
+        }
+        marker.style.left = `${img.offsetLeft + getObjectPositionOffset(style.objectPosition, boxWidth - contentWidth, 0) + contentWidth * pin.x / 100}px`;
+        marker.style.top = `${img.offsetTop + getObjectPositionOffset(style.objectPosition, boxHeight - contentHeight, 1) + contentHeight * pin.y / 100}px`;
+    }
+
+    function renderImagePin(stage, img, pin) {
+        let marker = stage.querySelector('.image-pin-marker');
+        if(!pin) { if(marker) marker.remove(); return null; }
+        if(!marker) { marker = document.createElement('span'); marker.className = 'image-pin-marker'; marker.textContent = '📍'; stage.appendChild(marker); }
+        positionImagePin(stage, img, marker, pin); return marker;
+    }
+
+    function scrollToImagePin(stage, img, pin) {
+        const marker = renderImagePin(stage, img, pin);
+        if(!marker) return;
+        const block = stage.closest('.pin-image-block');
+        let spacer = block && block.querySelector(':scope > .pin-scroll-spacer');
+        if(block && !spacer) { spacer = document.createElement('div'); spacer.className = 'pin-scroll-spacer'; block.appendChild(spacer); }
+        if(spacer) spacer.style.height = `${Math.ceil(scrollContainer.clientHeight / 2)}px`;
+        marker.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
+        const markerRect = marker.getBoundingClientRect(), viewportRect = scrollContainer.getBoundingClientRect();
+        scrollContainer.scrollTop += (markerRect.top + markerRect.height / 2) - (viewportRect.top + viewportRect.height / 2);
+    }
+
+    function attachImagePinControls(card, questionRoot, answerRoot) {
+        const images = [...questionRoot.querySelectorAll('img'), ...answerRoot.querySelectorAll('img')];
+        const img = images[images.length - 1];
+        if(!img || !card || !card.id) return;
+        const cardUuid = String(card.id), block = document.createElement('div'), toolbar = document.createElement('div');
+        block.className = 'pin-image-block'; toolbar.className = 'pin-image-toolbar';
+        const addButton = document.createElement('button'), moveButton = document.createElement('button');
+        addButton.type = moveButton.type = 'button'; addButton.className = moveButton.className = 'pin-image-btn';
+        addButton.textContent = '📍+'; moveButton.textContent = '📍이동';
+        addButton.title = '저장 위치로 이동 후 좌표 수정'; moveButton.title = '저장된 위치로 이동';
+        toolbar.append(addButton, moveButton);
+        const stage = document.createElement('div'); stage.className = 'pin-image-stage';
+        img.parentNode.insertBefore(block, img); block.append(toolbar, stage); stage.appendChild(img);
+        const refreshMarker = () => { const pin = getImagePins()[cardUuid]; if(pin && img.isConnected) renderImagePin(stage, img, pin); };
+        if(img.complete) refreshMarker(); else img.addEventListener('load', refreshMarker, { once: true });
+        if(typeof ResizeObserver !== 'undefined') new ResizeObserver(refreshMarker).observe(img);
+
+        addButton.addEventListener('click', e => {
+            e.preventDefault(); e.stopPropagation();
+            if(stage.classList.contains('pin-placement')) {
+                stage.classList.remove('pin-placement'); addButton.classList.remove('active'); showToast('좌표 수정을 취소했습니다.'); return;
+            }
+            const pin = getImagePins()[cardUuid];
+            if(pin) scrollToImagePin(stage, img, pin);
+            stage.classList.add('pin-placement'); addButton.classList.add('active');
+            showToast(pin ? '기존 위치입니다. 새 위치를 선택하세요.' : '하단 이미지에서 위치를 선택하세요.');
+        });
+        stage.addEventListener('click', e => {
+            if(!stage.classList.contains('pin-placement')) return;
+            e.preventDefault(); e.stopPropagation();
+            const metrics = getImageContentMetrics(img), rect = metrics.rect;
+            if(!rect.width || !rect.height || e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) return;
+            const pins = getImagePins();
+            pins[cardUuid] = { x: Math.min(100, Math.max(0, (e.clientX - metrics.left) / metrics.contentWidth * 100)), y: Math.min(100, Math.max(0, (e.clientY - metrics.top) / metrics.contentHeight * 100)), updatedAt: Date.now() };
+            setImagePins(pins); renderImagePin(stage, img, pins[cardUuid]);
+            stage.classList.remove('pin-placement'); addButton.classList.remove('active');
+            markLocalDataUpdated(pins[cardUuid].updatedAt); scheduleBackup('image-pin'); showToast('📍 위치를 저장했습니다.', 'success');
+        });
+        moveButton.addEventListener('click', e => {
+            e.preventDefault(); e.stopPropagation();
+            const pin = getImagePins()[cardUuid];
+            if(!pin) { showToast('먼저 📍+로 위치를 지정하세요.'); return; }
+            scrollToImagePin(stage, img, pin);
+        });
     }
 
     function getGradeHistoryScoreText(item) {
@@ -4556,6 +4693,7 @@
         const stats = payload.stats || getBackupStatsCandidate(raw);
         const reviewHistory = payload.reviewHistory || decodeUuidKeyedObject(raw && raw.reviewHistory, raw && raw.uuidKeyEncoding);
         const incomingNotes = payload.notesByCardUuid || normalizeNotesByCardUuid(decodeUuidKeyedObject(raw && raw.notesByCardUuid, raw && raw.uuidKeyEncoding));
+        const incomingImagePins = normalizeImagePins(decodeUuidKeyedObject(raw && raw.imagePinsByCardUuid, raw && raw.uuidKeyEncoding));
         if(stats && Object.keys(stats).length) setItemSafe(STORAGE_KEY_STATS, JSON.stringify(stats));
         if(reviewHistory && Object.keys(reviewHistory).length) setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(reviewHistory));
         if(raw.storage && typeof raw.storage === 'object') {
@@ -4564,6 +4702,7 @@
             });
         }
         if(hasBackupField(raw, 'notesByCardUuid')) setNotesByCardUuid(incomingNotes);
+        if(hasBackupField(raw, 'imagePinsByCardUuid')) setImagePins(incomingImagePins);
         if(hasBackupField(raw, 'progress')) setItemSafe(STORAGE_KEY_PROGRESS, raw.progress);
         if(hasBackupField(raw, 'filter')) setItemSafe(STORAGE_KEY_FILTER_STATE, raw.filter);
         if(hasBackupField(raw, 'targetRetention')) {
