@@ -524,7 +524,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.20.1 - 이미지 좌표 핀 버튼';
+    const APP_VERSION = 'Yople v11.20.2 - 이전 문제 좌표 참고';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3809,9 +3809,40 @@
         positionImagePin(stage, img, marker, pin); return marker;
     }
 
-    function scrollToImagePin(stage, img, pin) {
-        const marker = renderImagePin(stage, img, pin);
+    function getBottomReferenceImageIdentity(card) {
+        if(!card) return '';
+        const roots = [createDOM(card.q || '', false), createDOM(card.a || '', true)];
+        const images = roots.flatMap(root => [...root.querySelectorAll('img')]);
+        const source = images.length ? String(images[images.length - 1].getAttribute('src') || images[images.length - 1].src || '') : '';
+        if(!source) return '';
+        try { const url = new URL(source, document.baseURI); url.search = ''; url.hash = ''; return decodeURIComponent(url.href); }
+        catch(e) { return decodeURIComponent(source.split(/[?#]/)[0]); }
+    }
+
+    function getPreviousCardByNumberOrder(card) {
+        if(!card) return null;
+        const cards = Object.values(library || {}).flatMap(items => Array.isArray(items) ? items : []);
+        const stableIndex = new Map(cards.map((item, index) => [String(item && item.id || ''), index]));
+        cards.sort((a, b) => compareByNumberOrder(a, b) || (stableIndex.get(String(a && a.id || '')) ?? 0) - (stableIndex.get(String(b && b.id || '')) ?? 0));
+        const index = cards.findIndex(item => String(item && item.id || '') === String(card.id));
+        return index > 0 ? cards[index - 1] : null;
+    }
+
+    function getPreviousReferencePin(card, pins = getImagePins()) {
+        const previousCard = getPreviousCardByNumberOrder(card);
+        if(!previousCard) return null;
+        const pin = pins[String(previousCard.id)];
+        if(!pin) return null;
+        const currentImage = getBottomReferenceImageIdentity(card);
+        const previousImage = getBottomReferenceImageIdentity(previousCard);
+        if(!currentImage || currentImage !== previousImage) return null;
+        return { pin, card: previousCard };
+    }
+
+    function scrollToImagePin(stage, img, pin, showMarker = true) {
+        const marker = showMarker ? renderImagePin(stage, img, pin) : document.createElement('span');
         if(!marker) return;
+        if(!showMarker) { marker.className = 'pin-reference-anchor'; marker.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;'; stage.appendChild(marker); positionImagePin(stage, img, marker, pin); }
         const block = stage.closest('.pin-image-block');
         let spacer = block && block.querySelector(':scope > .pin-scroll-spacer');
         if(block && !spacer) { spacer = document.createElement('div'); spacer.className = 'pin-scroll-spacer'; block.appendChild(spacer); }
@@ -3819,6 +3850,7 @@
         marker.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'center' });
         const markerRect = marker.getBoundingClientRect(), viewportRect = scrollContainer.getBoundingClientRect();
         scrollContainer.scrollTop += (markerRect.top + markerRect.height / 2) - (viewportRect.top + viewportRect.height / 2);
+        if(!showMarker) marker.remove();
     }
 
     function attachImagePinControls(card, questionRoot, answerRoot) {
@@ -3850,10 +3882,12 @@
             if(stage.classList.contains('pin-placement')) {
                 stage.classList.remove('pin-placement'); addButton.classList.remove('active'); showToast('좌표 수정을 취소했습니다.'); return;
             }
-            const pin = getImagePins()[cardUuid];
-            if(pin) scrollToImagePin(stage, img, pin);
+            const pins = getImagePins(), pin = pins[cardUuid];
+            const previousReference = pin ? null : getPreviousReferencePin(card, pins);
+            if(pin) scrollToImagePin(stage, img, pin, true);
+            else if(previousReference) scrollToImagePin(stage, img, previousReference.pin, false);
             stage.classList.add('pin-placement'); addButton.classList.add('active');
-            showToast(pin ? '기존 위치입니다. 새 위치를 선택하세요.' : '하단 이미지에서 위치를 선택하세요.');
+            showToast(pin ? '기존 위치입니다. 새 위치를 선택하세요.' : (previousReference ? '직전 문제 위치를 참고해 새 위치를 선택하세요.' : '하단 이미지에서 위치를 선택하세요.'));
         });
         stage.addEventListener('click', e => {
             if(!stage.classList.contains('pin-placement')) return;
