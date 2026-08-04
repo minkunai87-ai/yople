@@ -524,7 +524,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.20.0 - 이미지 좌표 핀';
+    const APP_VERSION = 'Yople v11.20.1 - 이미지 좌표 핀 버튼';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3749,7 +3749,16 @@
     }
 
     function getImagePins() { return normalizeImagePins(getStorageItem(STORAGE_KEY_IMAGE_PINS)); }
-    function setImagePins(pins) { setStorageItem(STORAGE_KEY_IMAGE_PINS, JSON.stringify(normalizeImagePins(pins))); }
+    function refreshCurrentImagePinControls() {
+        document.querySelectorAll('.pin-image-block[data-card-uuid]').forEach(block => {
+            if(typeof block._syncImagePinButtons === 'function') block._syncImagePinButtons();
+        });
+    }
+    function setImagePins(pins) {
+        setStorageItem(STORAGE_KEY_IMAGE_PINS, JSON.stringify(normalizeImagePins(pins)));
+        refreshCurrentImagePinControls();
+    }
+    window.addEventListener('storage', e => { if(e.key === STORAGE_KEY_IMAGE_PINS) refreshCurrentImagePinControls(); });
 
     function getObjectPositionOffset(value, freeSpace, axis) {
         const parts = String(value || '50% 50%').trim().split(/\s+/);
@@ -3817,12 +3826,19 @@
         const img = images[images.length - 1];
         if(!img || !card || !card.id) return;
         const cardUuid = String(card.id), block = document.createElement('div'), toolbar = document.createElement('div');
-        block.className = 'pin-image-block'; toolbar.className = 'pin-image-toolbar';
+        block.className = 'pin-image-block'; block.dataset.cardUuid = cardUuid; toolbar.className = 'pin-image-toolbar';
         const addButton = document.createElement('button'), moveButton = document.createElement('button');
         addButton.type = moveButton.type = 'button'; addButton.className = moveButton.className = 'pin-image-btn';
         addButton.textContent = '📍+'; moveButton.textContent = '📍이동';
         addButton.title = '저장 위치로 이동 후 좌표 수정'; moveButton.title = '저장된 위치로 이동';
-        toolbar.append(addButton, moveButton);
+        toolbar.append(addButton);
+        const syncMoveButton = () => {
+            const hasPin = !!getImagePins()[cardUuid];
+            if(hasPin && !moveButton.isConnected) toolbar.appendChild(moveButton);
+            else if(!hasPin && moveButton.isConnected) moveButton.remove();
+        };
+        block._syncImagePinButtons = syncMoveButton;
+        syncMoveButton();
         const stage = document.createElement('div'); stage.className = 'pin-image-stage';
         img.parentNode.insertBefore(block, img); block.append(toolbar, stage); stage.appendChild(img);
         const refreshMarker = () => { const pin = getImagePins()[cardUuid]; if(pin && img.isConnected) renderImagePin(stage, img, pin); };
