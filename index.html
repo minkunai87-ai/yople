@@ -528,7 +528,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.22.0 - 다중 이미지 핀';
+    const APP_VERSION = 'Yople v11.22.1 - Firebase 표시 복구';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3745,21 +3745,29 @@
     function normalizeImagePins(value) {
         const parsed = parseJSONSafe(value, {});
         const result = {};
-        Object.entries(parsed || {}).forEach(([cardUuid, record]) => {
-            if(!cardUuid) return;
-            const sourcePins = Array.isArray(record && record.pins) ? record.pins : (Array.isArray(record) ? record : [record]);
-            const pins = sourcePins.map(pin => {
-                const x = Number(pin && pin.x), y = Number(pin && pin.y);
-                if(!Number.isFinite(x) || !Number.isFinite(y)) return null;
-                return { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
-            }).filter(Boolean);
-            if(!pins.length) return;
-            result[String(cardUuid)] = {
-                cardUuid: String(cardUuid),
-                pins,
-                updatedAt: Math.max(Number(record && record.updatedAt) || 0, ...pins.map(pin => pin.updatedAt || 0))
-            };
-        });
+        try {
+            Object.entries(parsed && typeof parsed === 'object' ? parsed : {}).forEach(([cardUuid, record]) => {
+                try {
+                    if(!cardUuid) return;
+                    const sourcePins = Array.isArray(record && record.pins) ? record.pins : (Array.isArray(record) ? record : [record]);
+                    const pins = sourcePins.map(pin => {
+                        const x = Number(pin && pin.x), y = Number(pin && pin.y);
+                        if(!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                        return { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
+                    }).filter(Boolean);
+                    if(!pins.length) return;
+                    result[String(cardUuid)] = {
+                        cardUuid: String(cardUuid),
+                        pins,
+                        updatedAt: Math.max(Number(record && record.updatedAt) || 0, ...pins.map(pin => pin.updatedAt || 0))
+                    };
+                } catch(error) {
+                    console.warn('[Yople Image Pin Record Ignored]', { cardUuid, error: error && error.message ? error.message : String(error) });
+                }
+            });
+        } catch(error) {
+            console.warn('[Yople Image Pin Payload Ignored]', error && error.message ? error.message : error);
+        }
         return result;
     }
 
@@ -4827,22 +4835,51 @@
         };
     }
 
+    function getBackupImagePinsCandidate(raw = {}) {
+        if(hasBackupField(raw, 'imagePinsByCardUuid')) {
+            return decodeUuidKeyedObject(raw.imagePinsByCardUuid, raw.uuidKeyEncoding);
+        }
+        if(raw.storage && hasBackupField(raw.storage, STORAGE_KEY_IMAGE_PINS)) {
+            return parseJSONSafe(raw.storage[STORAGE_KEY_IMAGE_PINS], {});
+        }
+        return null;
+    }
+
+    function restoreImagePinsFromBackup(raw = {}, source = 'restore') {
+        const candidate = getBackupImagePinsCandidate(raw);
+        if(candidate === null) {
+            console.log('[Yople Image Pins Restore]', { source, action: 'absent-keep-local' });
+            return { ok: true, action: 'absent', cardCount: Object.keys(getImagePins()).length };
+        }
+        try {
+            const pins = normalizeImagePins(candidate);
+            setImagePins(pins);
+            const pinCount = Object.values(pins).reduce((sum, record) => sum + (record.pins || []).length, 0);
+            console.log('[Yople Image Pins Restore]', { source, action: 'restored', cardCount: Object.keys(pins).length, pinCount });
+            return { ok: true, action: 'restored', cardCount: Object.keys(pins).length, pinCount };
+        } catch(error) {
+            console.warn('[Yople Image Pins Restore Ignored]', { source, error: error && error.message ? error.message : String(error) });
+            return { ok: false, action: 'ignored', error: error && error.message ? error.message : String(error) };
+        }
+    }
+
     function applyRestoredState(payload = {}, source = 'restore') {
         console.log('RESTORE_START', { source });
         const raw = payload.raw || payload;
         const stats = payload.stats || getBackupStatsCandidate(raw);
         const reviewHistory = payload.reviewHistory || decodeUuidKeyedObject(raw && raw.reviewHistory, raw && raw.uuidKeyEncoding);
-        const incomingNotes = payload.notesByCardUuid || normalizeNotesByCardUuid(decodeUuidKeyedObject(raw && raw.notesByCardUuid, raw && raw.uuidKeyEncoding));
-        const incomingImagePins = normalizeImagePins(decodeUuidKeyedObject(raw && raw.imagePinsByCardUuid, raw && raw.uuidKeyEncoding));
+        // Stats/history are deliberately committed before optional UI data such as pins.
         if(stats && Object.keys(stats).length) setItemSafe(STORAGE_KEY_STATS, JSON.stringify(stats));
         if(reviewHistory && Object.keys(reviewHistory).length) setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(reviewHistory));
         if(raw.storage && typeof raw.storage === 'object') {
             Object.entries(raw.storage).forEach(([key, value]) => {
-                if(key.startsWith(APP_CONFIG.storagePrefix) && key !== STORAGE_KEY_STATS && value !== null) setItemSafe(key, String(value));
+                if(key.startsWith(APP_CONFIG.storagePrefix) && key !== STORAGE_KEY_STATS && key !== STORAGE_KEY_IMAGE_PINS && value !== null) setItemSafe(key, String(value));
             });
         }
-        if(hasBackupField(raw, 'notesByCardUuid')) setNotesByCardUuid(incomingNotes);
-        if(hasBackupField(raw, 'imagePinsByCardUuid')) setImagePins(incomingImagePins);
+        if(hasBackupField(raw, 'notesByCardUuid')) {
+            try { setNotesByCardUuid(payload.notesByCardUuid || normalizeNotesByCardUuid(decodeUuidKeyedObject(raw.notesByCardUuid, raw.uuidKeyEncoding))); }
+            catch(error) { console.warn('[Yople Notes Restore Ignored]', error && error.message ? error.message : error); }
+        }
         if(hasBackupField(raw, 'progress')) setItemSafe(STORAGE_KEY_PROGRESS, raw.progress);
         if(hasBackupField(raw, 'filter')) setItemSafe(STORAGE_KEY_FILTER_STATE, raw.filter);
         if(hasBackupField(raw, 'targetRetention')) {
@@ -4868,6 +4905,7 @@
         const restoredUpdatedAt = Number(payload.updatedAt) || getLocalDataUpdatedAt();
         if(restoredUpdatedAt) markLocalDataUpdated(source === 'cloud' ? restoredUpdatedAt : Math.max(getLocalDataUpdatedAt(), restoredUpdatedAt));
         logStudyStateSnapshot('restore', { stats, reviewHistory, viewState: restoredViewState });
+        restoreImagePinsFromBackup(raw, source);
         console.log('RESTORE_COMPLETE', { source, currentCardUuid: restoredViewState.currentCardUuid || restoredViewState.cardId || '' });
         return restoredViewState;
     }
@@ -5131,6 +5169,7 @@
                 setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(mergedReviewHistory));
                 await saveStatsToIndexedDBFallback(decision.stats);
                 markLocalDataUpdated(Math.max(decision.localMetrics.lastLearningAt, decision.cloudMetrics.lastLearningAt));
+                restoreImagePinsFromBackup(cloudState.raw || {}, 'auto-merge');
                 showToast('로컬과 클라우드 학습 데이터를 안전하게 병합했습니다.', 'success');
             } else {
                 restorePosition(localState.viewState || {}, 'local');
