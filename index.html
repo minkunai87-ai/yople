@@ -531,7 +531,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.22.4 - 해시 GUID 카드 복구';
+    const APP_VERSION = 'Yople v11.22.5 - Firebase 체크섬 호환 복구';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -815,8 +815,8 @@
 
     function stableStringify(value) {
         if(value === null || typeof value !== 'object') return JSON.stringify(value);
-        if(Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-        return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+        if(Array.isArray(value)) return `[${value.map(item => stableStringify(item) ?? 'null').join(',')}]`;
+        return `{${Object.keys(value).sort().filter(key => stableStringify(value[key]) !== undefined).map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
     }
 
     async function sha256Hex(value) {
@@ -838,6 +838,58 @@
             metadata: data.metadata || {},
             currentCardUuid: String(data.currentCardUuid || ''),
             localUpdatedAt: Number(data.localUpdatedAt) || 0
+        };
+    }
+
+    // Realtime Database removes null-valued object properties. Canonical checksums are
+    // calculated from that exact transport shape, while array nulls remain positional.
+    function normalizeFirebaseChecksumValue(value, inArray = false, isRoot = false) {
+        if(value === null) return inArray ? null : undefined;
+        if(Array.isArray(value)) {
+            const normalized = value.map(item => normalizeFirebaseChecksumValue(item, true) ?? null);
+            return normalized.length || isRoot ? normalized : (inArray ? null : undefined);
+        }
+        if(value && typeof value === 'object') {
+            const normalized = {};
+            Object.keys(value).sort().forEach(key => {
+                const item = normalizeFirebaseChecksumValue(value[key], false);
+                if(item !== undefined) normalized[key] = item;
+            });
+            return Object.keys(normalized).length || isRoot ? normalized : (inArray ? null : undefined);
+        }
+        if(typeof value === 'number' && !Number.isFinite(value)) return inArray ? null : undefined;
+        if(['undefined', 'function', 'symbol'].includes(typeof value)) return inArray ? null : undefined;
+        return value;
+    }
+
+    function getCanonicalBackupIntegrityPayload(data = {}) {
+        const payload = {};
+        Object.keys(data || {}).forEach(key => {
+            if(key !== 'integrity' && key !== 'checksum') payload[key] = data[key];
+        });
+        return normalizeFirebaseChecksumValue(payload, false, true) || {};
+    }
+
+    function restoreLegacyFirebaseNullFields(stats = {}) {
+        const restored = structuredClone(stats || {});
+        Object.values(restored).forEach(stat => {
+            (Array.isArray(stat && stat.history) ? stat.history : []).forEach(entry => {
+                if(entry && typeof entry === 'object' && !Object.prototype.hasOwnProperty.call(entry, 'points')
+                    && (entry.type === 'confirm' || entry.result === 'confirm')) entry.points = null;
+            });
+        });
+        return restored;
+    }
+
+    function getStatsIntegritySummary(stats = {}) {
+        const values = Object.values(stats || {});
+        return {
+            statsCount: values.length,
+            uuidCount: Object.keys(stats || {}).length,
+            historyCount: values.reduce((sum, stat) => sum + (Array.isArray(stat && stat.history) ? stat.history.length : 0), 0),
+            total: values.reduce((sum, stat) => sum + (Number(stat && stat.total) || 0), 0),
+            correct: values.reduce((sum, stat) => sum + (Number(stat && stat.correct) || 0), 0),
+            fsrsCount: values.reduce((sum, stat) => sum + (stat && stat.fsrs && typeof stat.fsrs === 'object' ? 1 : 0), 0)
         };
     }
     let backupTimer = null;
@@ -1854,8 +1906,26 @@
             metadata: { ...metadata, localUpdatedAt: getLocalDataUpdatedAt(), cardCount: cardValidation.libraryCardCount, statsCount }
         };
         const canonicalData = JSON.parse(JSON.stringify(data));
-        const checksum = await sha256Hex(getBackupIntegrityPayload(canonicalData));
-        return { ...canonicalData, integrity: { algorithm: 'SHA-256', checksum, schemaVersion: BACKUP_SCHEMA_VERSION } };
+        const checksum = await sha256Hex(getCanonicalBackupIntegrityPayload(canonicalData));
+        return { ...canonicalData, integrity: { algorithm: 'SHA-256', checksum, schemaVersion: BACKUP_SCHEMA_VERSION, canonicalization: 'firebase-canonical-json-v1' } };
+    }
+
+    function validateBackupStatsStructure(data, stats) {
+        const rawStats = parseBackupField(data && data.stats, {});
+        const decodedIds = Object.keys(rawStats || {}).map(key => data && (data.statsKeyEncoding || data.uuidKeyEncoding) === FIREBASE_UUID_KEY_ENCODING ? decodeFirebaseUuidKey(key) : key);
+        const duplicateIds = decodedIds.filter((id, index) => decodedIds.indexOf(id) !== index);
+        if(duplicateIds.length) throw new Error(`INVALID_BACKUP_DUPLICATE_UUID ${[...new Set(duplicateIds)].slice(0, 10).join(',')}`);
+        for(const [uuid, stat] of Object.entries(stats || {})) {
+            if(!String(uuid).trim()) throw new Error('INVALID_BACKUP_UUID_EMPTY');
+            if(!stat || typeof stat !== 'object' || Array.isArray(stat)) throw new Error(`INVALID_BACKUP_STAT_STRUCTURE ${uuid}`);
+            if(stat.history !== undefined && !Array.isArray(stat.history)) throw new Error(`INVALID_BACKUP_HISTORY_STRUCTURE ${uuid}`);
+            for(const field of ['total', 'correct']) {
+                if(stat[field] !== undefined && (!Number.isFinite(Number(stat[field])) || Number(stat[field]) < 0)) throw new Error(`INVALID_BACKUP_${field.toUpperCase()} ${uuid}`);
+            }
+            if(stat.fsrs !== undefined && (!stat.fsrs || typeof stat.fsrs !== 'object' || Array.isArray(stat.fsrs))) throw new Error(`INVALID_BACKUP_FSRS_STRUCTURE ${uuid}`);
+            if(stat.fsrs && stat.fsrs.reps !== undefined && (!Number.isFinite(Number(stat.fsrs.reps)) || Number(stat.fsrs.reps) < 0)) throw new Error(`INVALID_BACKUP_FSRS_REPS ${uuid}`);
+        }
+        return { duplicateIds, summary: getStatsIntegritySummary(stats) };
     }
 
     async function validateBackupData(data, options = {}) {
@@ -1863,16 +1933,29 @@
         if(data.appId !== APP_CONFIG.id) throw new Error('INVALID_BACKUP_APP_ID');
         if(Number(data.schemaVersion) !== BACKUP_SCHEMA_VERSION) throw new Error('INVALID_BACKUP_SCHEMA');
         if(!data.integrity || data.integrity.algorithm !== 'SHA-256' || !data.integrity.checksum) throw new Error('INVALID_BACKUP_INTEGRITY_MISSING');
-        const checksum = await sha256Hex(getBackupIntegrityPayload(data));
-        if(checksum !== data.integrity.checksum) throw new Error('INVALID_BACKUP_CHECKSUM');
         const stats = getBackupStatsCandidate(data);
         const statsCount = Object.keys(stats || {}).length;
         if(!statsCount || statsCount !== Number(data.statsCount)) throw new Error('INVALID_BACKUP_STATS_COUNT');
+        const structural = validateBackupStatsStructure(data, stats);
         const cardValidation = validateStatsCardIds(stats);
         if(!cardValidation.valid) throw new Error(`INVALID_BACKUP_CARD_IDS ${cardValidation.invalid.join(',')}`);
         const localCount = Object.keys(getStatsStore() || {}).length;
         if(!options.allowSmaller && localCount >= 100 && statsCount < localCount * 0.5 && localCount - statsCount >= 100) throw new Error('RESTORE_BLOCKED_RAPID_STATS_DROP');
-        return { stats, statsCount, checksum };
+        const storedChecksum = String(data.integrity.checksum).toLowerCase();
+        const canonicalMode = data.integrity.canonicalization === 'firebase-canonical-json-v1';
+        const attempts = [];
+        if(canonicalMode) attempts.push({ mode: 'firebase-canonical-json-v1', checksum: await sha256Hex(getCanonicalBackupIntegrityPayload(data)) });
+        else {
+            attempts.push({ mode: 'legacy-stable-json', checksum: await sha256Hex(getBackupIntegrityPayload(data)) });
+            const legacyPayload = getBackupIntegrityPayload(data);
+            legacyPayload.stats = restoreLegacyFirebaseNullFields(stats);
+            attempts.push({ mode: 'legacy-firebase-null-compat', checksum: await sha256Hex(legacyPayload) });
+        }
+        const matched = attempts.find(attempt => attempt.checksum === storedChecksum);
+        window.__YOPLE_LAST_CHECKSUM_DIAGNOSTIC__ = { storedChecksum, attempts, matchedMode: matched && matched.mode || '', summary: structural.summary };
+        console.log('[Yople Backup Checksum]', window.__YOPLE_LAST_CHECKSUM_DIAGNOSTIC__);
+        if(!matched) throw new Error(`INVALID_BACKUP_CHECKSUM stored=${storedChecksum} calculated=${attempts.map(item => `${item.mode}:${item.checksum}`).join(',')}`);
+        return { stats, statsCount, checksum: matched.checksum, checksumMode: matched.mode, summary: structural.summary };
     }
 
     function getBackupErrorMessage(code) {
@@ -2272,14 +2355,26 @@
     }
 
     function captureLocalRestoreSnapshot() {
-        return { stats: structuredClone(getStatsStore() || {}), storage: getBackupStorageSnapshot(), updatedAt: getLocalDataUpdatedAt(), isDataChanged };
+        const storage = {};
+        for(let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if(key && key.startsWith(APP_CONFIG.storagePrefix)) storage[key] = localStorage.getItem(key);
+        }
+        return { stats: structuredClone(getStatsStore() || {}), storage, updatedAt: getLocalDataUpdatedAt(), isDataChanged };
     }
 
     async function rollbackLocalRestoreSnapshot(snapshot) {
         inMemoryStatsStore = structuredClone(snapshot.stats || {});
         statsPersistencePromise = saveStatsToIndexedDBFallback(inMemoryStatsStore);
-        await statsPersistencePromise;
-        Object.keys(getBackupStorageSnapshot()).forEach(key => removeStorageItem(key));
+        if(await statsPersistencePromise !== true) throw new Error('RESTORE_ROLLBACK_INDEXEDDB_SAVE_FAILED');
+        const persisted = await readStatsFromIndexedDBForBackup();
+        if(stableStringify(persisted) !== stableStringify(inMemoryStatsStore)) throw new Error('RESTORE_ROLLBACK_VERIFY_FAILED');
+        const currentKeys = [];
+        for(let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if(key && key.startsWith(APP_CONFIG.storagePrefix)) currentKeys.push(key);
+        }
+        currentKeys.forEach(key => removeStorageItem(key));
         Object.entries(snapshot.storage || {}).forEach(([key, value]) => setStorageItem(key, value));
         if(snapshot.updatedAt) setStorageItem(STORAGE_KEY_LOCAL_DATA_UPDATED_AT, String(snapshot.updatedAt));
         isDataChanged = !!snapshot.isDataChanged;
@@ -2289,6 +2384,8 @@
         const normalizedBackupPath = assertYopleFirebasePath(backupPath);
         if(normalizedBackupPath !== FIREBASE_BACKUP_PATH) throw new Error('BLOCKED_INVALID_BACKUP_ROOT');
         const localSnapshot = captureLocalRestoreSnapshot();
+        window.__YOPLE_LAST_RESTORE_ERROR__ = '';
+        window.__YOPLE_LAST_RESTORE_VERIFICATION__ = null;
         restoreInProgress = true;
         updateFullRecalcButtonState();
         try {
@@ -2298,14 +2395,20 @@
             const targetData = await res.json();
             if(!targetData || typeof targetData !== 'object') throw new Error('Firebase restore data is empty');
             if(!isYokiBackupRecord(targetData, normalizedBackupPath)) throw new Error(`Blocked non-Yople backup restore: ${targetData.appId || 'unknown'}`);
-            await validateBackupData(targetData, { allowSmaller: !!options.allowSmaller });
+            const validation = await validateBackupData(targetData, { allowSmaller: !!options.allowSmaller });
             logYokiStorageDiagnostics('before-firebase-restore', targetData);
             const normalizedManualPayload = normalizeBackupPayload(targetData, isAutoPull ? 'auto-restore' : 'manual-restore', ts, normalizedBackupPath);
             applyRestoredState(normalizedManualPayload, normalizedManualPayload.source);
-            statsPersistencePromise = saveStatsToIndexedDBFallback(getStatsStore());
-            await statsPersistencePromise;
+            const expectedStats = structuredClone(getStatsStore());
+            const expectedSummary = getStatsIntegritySummary(expectedStats);
+            statsPersistencePromise = saveStatsToIndexedDBFallback(expectedStats);
+            if(await statsPersistencePromise !== true) throw new Error('RESTORE_INDEXEDDB_SAVE_FAILED');
             const persistedStats = await readStatsFromIndexedDBForBackup();
             if(Object.keys(persistedStats).length !== Number(targetData.statsCount)) throw new Error('RESTORE_VERIFY_STATS_COUNT_FAILED');
+            const persistedSummary = getStatsIntegritySummary(persistedStats);
+            if(stableStringify(persistedSummary) !== stableStringify(expectedSummary)) throw new Error('RESTORE_VERIFY_STATS_AGGREGATE_FAILED');
+            if(stableStringify(persistedStats) !== stableStringify(expectedStats)) throw new Error('RESTORE_VERIFY_STATS_CONTENT_FAILED');
+            window.__YOPLE_LAST_RESTORE_VERIFICATION__ = { checksumMode: validation.checksumMode, expected: expectedSummary, persisted: persistedSummary };
             setItemSafe(STORAGE_KEY_LAST_SYNC_TIME, ts.toString());
             logYokiStorageDiagnostics('after-unified-firebase-restore');
             library = {};

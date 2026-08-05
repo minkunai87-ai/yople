@@ -1,4 +1,4 @@
-const APP_CACHE = 'yople-app-shell-v4';
+const APP_CACHE = 'yople-app-shell-v5';
 const IMAGE_CACHE = 'yople-images-v4';
 const YOPLE_CACHE_PREFIX = 'yople-';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './yople-icon.svg', './행정법.txt'];
