@@ -175,6 +175,14 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
   expect(afterReviews.audit.metadataUpdates).toBe(0);
   expect(afterReviews.audit.blockedBackupCalls).toBeGreaterThanOrEqual(3);
   expect(await page.evaluate(() => {
+    const prepared = buildTodayEssentialCandidates();
+    const completedIds = new Set(todayEssentialState.processedIds);
+    return {
+      candidateCount: prepared.candidates.length,
+      completedStillIncluded: prepared.candidates.some(card => completedIds.has(getTodayEssentialCardId(card)))
+    };
+  })).toEqual({ candidateCount: 597, completedStillIncluded: false });
+  expect(await page.evaluate(() => {
     const model = buildLearningStatsModel();
     return {
       todayReview: model.totals.todayReview.size,
@@ -204,7 +212,7 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
   await page.evaluate(() => document.getElementById('filter-essential').click());
   await page.click('#essential-release');
   expect(await page.evaluate(() => ({ active: todayEssentialState.active, count: activeDeck.length })))
-    .toEqual({ active: false, count: 600 });
+    .toEqual({ active: false, count: 597 });
 
   const completion = await page.evaluate(() => {
     openTodayEssentialSheet();

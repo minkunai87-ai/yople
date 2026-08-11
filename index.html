@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.0 - 학습 통계</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.1 - 오늘 필수 완료 제외</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.0 - 학습 통계';
+    const APP_VERSION = 'Yople v11.23.1 - 오늘 필수 완료 제외';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3534,6 +3534,8 @@
         const candidates = existingOrder.filter(card => {
             const stat = findStatsForCard(card, statsSnapshot) || {};
             if(!isTodayReviewTarget(stat, todayStart)) return false;
+            const history = Array.isArray(stat.history) ? stat.history : [];
+            if(history.some(item => isHistoryItemToday(item, todayStart))) return false;
             if(query && !String(card.q || '').toLowerCase().includes(query) && !String(card.a || '').toLowerCase().includes(query)) return false;
             if(otherFilters.length && !otherFilters.some(mode => !!stat[mode])) return false;
             return true;
