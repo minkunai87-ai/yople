@@ -137,6 +137,20 @@
     .rate-history-time { color: var(--text-sub); font-size: 0.74rem; }
     .rate-history-delete { flex-shrink: 0; border: none; background: #3b1616; color: #ff8787; border-radius: 6px; padding: 4px 8px; font-weight: bold; cursor: pointer; }
     .rate-history-delete:active { background: #fa5252; color: white; }
+    .learning-stats-modal { align-items:stretch; justify-content:center; padding:0; }
+    .learning-stats-panel { width:min(100%, 560px); height:100dvh; max-height:none; border-radius:0; padding:calc(env(safe-area-inset-top) + 14px) 16px calc(env(safe-area-inset-bottom) + 18px); overflow:auto; background:var(--bg); }
+    .learning-stats-header { display:flex; align-items:center; gap:10px; position:sticky; top:calc(-1 * env(safe-area-inset-top) - 14px); margin:-14px -16px 14px; padding:calc(env(safe-area-inset-top) + 14px) 16px 12px; background:var(--surface); border-bottom:1px solid var(--border); z-index:2; }
+    .learning-stats-back { border:0; background:none; color:var(--text); font-size:1.45rem; cursor:pointer; padding:2px 8px 2px 0; }
+    .learning-stats-title { margin:0; font-size:1.08rem; }
+    .learning-stats-card { border:1px solid var(--border); border-radius:12px; background:var(--surface); padding:14px; margin-bottom:14px; }
+    .learning-stats-heading { margin:0 0 10px; font-size:0.95rem; color:var(--text); }
+    .learning-stats-summary-row { display:grid; grid-template-columns:1fr auto; gap:8px; padding:9px 0; align-items:center; font-size:0.9rem; }
+    .learning-stats-summary-row + .learning-stats-summary-row { border-top:1px solid var(--border); }
+    .learning-stats-value { font-weight:800; }
+    .learning-stats-row { width:100%; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); padding:12px; margin-bottom:8px; text-align:left; }
+    .learning-stats-deck { font-weight:800; overflow-wrap:anywhere; }
+    .learning-stats-meta { color:var(--text-sub); font-size:0.8rem; line-height:1.45; margin-top:5px; }
+    .learning-stats-empty { color:var(--text-sub); text-align:center; padding:22px 8px; }
     .badge-today { background: #0b2e13; color: #40c057; border: 1px solid #40c057; } 
     .badge-1d { background: #3f2e05; color: #ffd43b; border: 1px solid #ffd43b; } 
     .badge-old { background: #212529; color: #868e96; border: 1px solid #495057; } 
@@ -259,6 +273,7 @@
         <div class="menu-section">
             <span class="menu-label">최근 학습</span>
             <div class="recent-decks" id="recent-decks-ui"></div>
+            <button class="btn-sub" onclick="openLearningStats()">📊 학습 통계</button>
         </div>
         <div class="menu-section">
             <span class="menu-label">덱 관리</span>
@@ -277,7 +292,21 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.19.7 - Firebase GUID 백업</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.0 - 학습 통계</div>
+    </div>
+
+    <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
+        <div class="modal-content learning-stats-panel">
+            <div class="learning-stats-header">
+                <button class="learning-stats-back" onclick="closeLearningStats()" aria-label="닫기">‹</button>
+                <h2 class="learning-stats-title">학습 통계</h2>
+            </div>
+            <section class="learning-stats-card">
+                <h3 class="learning-stats-heading">전체</h3>
+                <div id="learning-stats-summary"></div>
+            </section>
+            <div id="learning-stats-decks"></div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="tr-modal">
@@ -531,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.22.5 - Firebase 체크섬 호환 복구';
+    const APP_VERSION = 'Yople v11.23.0 - 학습 통계';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -541,6 +570,7 @@
     const REVIEW_DURATION_DEFAULT_SECONDS = 12;
     const REVIEW_DURATION_MAX_SAMPLES = 300;
     let reviewTimingState = null;
+    let learningStatsHistoryActive = false;
     let todayEssentialState = {
         active: false,
         prepared: null,
@@ -3343,6 +3373,117 @@
         return String(card && card.id || '');
     }
 
+    function getLocalTodayBounds(timestamp = Date.now()) {
+        const start = new Date(timestamp);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        return { start: start.getTime(), end: end.getTime() };
+    }
+
+    function isHistoryItemToday(item, timestamp = Date.now()) {
+        const bounds = getLocalTodayBounds(timestamp);
+        const time = getHistoryItemTime(item);
+        return time >= bounds.start && time < bounds.end;
+    }
+
+    function isTodayReviewTarget(stat = {}, timestamp = Date.now()) {
+        const bounds = getLocalTodayBounds(timestamp);
+        if(Number(stat.dueDate) > 0 && Number(stat.dueDate) <= bounds.start) return true;
+        const history = Array.isArray(stat.history) ? stat.history : [];
+        const todayHistory = history.filter(item => isHistoryItemToday(item, timestamp));
+        if(todayHistory.some(item => item && item.wasTodayReview === true)) return true;
+        if(todayHistory.some(item => item && item.wasTodayReview === false)) return false;
+        return todayHistory.length > 0 && history.some(item => {
+            const time = getHistoryItemTime(item);
+            return time > 0 && time < bounds.start;
+        });
+    }
+
+    function getUniqueLibraryCards() {
+        const seen = new Set();
+        const cards = [];
+        Object.entries(library || {}).forEach(([deck, deckCards]) => {
+            (Array.isArray(deckCards) ? deckCards : []).forEach(card => {
+                const id = getTodayEssentialCardId(card);
+                if(!id || seen.has(id)) return;
+                seen.add(id);
+                cards.push(card.deck ? card : { ...card, deck });
+            });
+        });
+        return cards;
+    }
+
+    function buildLearningStatsModel(timestamp = Date.now()) {
+        const stats = getStatsStore();
+        const totals = { todayReview:new Set(), otherStudy:new Set(), totalStudy:new Set() };
+        const decks = new Map();
+        const ensureDeck = name => {
+            if(!decks.has(name)) decks.set(name, { todayReview:new Set(), otherStudy:new Set(), totalStudy:new Set() });
+            return decks.get(name);
+        };
+        getUniqueLibraryCards().forEach(card => {
+            const id = getTodayEssentialCardId(card);
+            const stat = findStatsForCard(card, stats) || {};
+            const reviewedToday = (Array.isArray(stat.history) ? stat.history : []).some(item => isHistoryItemToday(item, timestamp));
+            const reviewTarget = isTodayReviewTarget(stat, timestamp);
+            const topDeck = String(card.deck || '').split('__').filter(Boolean)[0];
+            const deckMetric = topDeck ? ensureDeck(topDeck) : null;
+            if(reviewTarget) {
+                totals.todayReview.add(id);
+                if(deckMetric) deckMetric.todayReview.add(id);
+            }
+            if(reviewedToday) {
+                totals.totalStudy.add(id);
+                if(deckMetric) deckMetric.totalStudy.add(id);
+                if(!reviewTarget) {
+                    totals.otherStudy.add(id);
+                    if(deckMetric) deckMetric.otherStudy.add(id);
+                }
+            }
+        });
+        return { totals, decks };
+    }
+
+    function renderLearningStats() {
+        const model = buildLearningStatsModel();
+        const renderMetrics = metric => `
+            <div class="learning-stats-summary-row"><span>오늘 복습</span><span class="learning-stats-value">${metric.todayReview.size}</span></div>
+            <div class="learning-stats-summary-row"><span>기타 학습</span><span class="learning-stats-value">${metric.otherStudy.size}</span></div>
+            <div class="learning-stats-summary-row"><span>총 학습</span><span class="learning-stats-value">${metric.totalStudy.size}</span></div>`;
+        document.getElementById('learning-stats-summary').innerHTML = renderMetrics(model.totals);
+        const rows = [...model.decks.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ko'));
+        document.getElementById('learning-stats-decks').innerHTML = rows.length ? rows.map(([deck, metric]) => `
+            <section class="learning-stats-row">
+                <div class="learning-stats-deck">${escapeLearningStatsHtml(deck)}</div>
+                <div class="learning-stats-meta">오늘 복습 ${metric.todayReview.size} · 기타 학습 ${metric.otherStudy.size} · 총 학습 ${metric.totalStudy.size}</div>
+            </section>`).join('') : '<div class="learning-stats-empty">표시할 덱이 없습니다.</div>';
+    }
+
+    function escapeLearningStatsHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
+    }
+
+    function openLearningStats() {
+        toggleMenu(false);
+        renderLearningStats();
+        document.getElementById('learning-stats-modal').style.display = 'flex';
+        if(!learningStatsHistoryActive) {
+            history.pushState({ yopleLearningStats:true }, '');
+            learningStatsHistoryActive = true;
+        }
+    }
+
+    function closeLearningStats(fromHistory = false) {
+        document.getElementById('learning-stats-modal').style.display = 'none';
+        if(learningStatsHistoryActive && !fromHistory) history.back();
+        learningStatsHistoryActive = false;
+    }
+
+    window.addEventListener('popstate', () => {
+        if(learningStatsHistoryActive) closeLearningStats(true);
+    });
+
     function isWrongHistoryItem(item) {
         return item && !isConfirmHistoryItem(item) && Number(item.score) === 0;
     }
@@ -3392,7 +3533,7 @@
         });
         const candidates = existingOrder.filter(card => {
             const stat = findStatsForCard(card, statsSnapshot) || {};
-            if(!(stat.dueDate && Number(stat.dueDate) <= todayStart)) return false;
+            if(!isTodayReviewTarget(stat, todayStart)) return false;
             if(query && !String(card.q || '').toLowerCase().includes(query) && !String(card.a || '').toLowerCase().includes(query)) return false;
             if(otherFilters.length && !otherFilters.some(mode => !!stat[mode])) return false;
             return true;
@@ -3592,11 +3733,9 @@
         
         const selectedFilters = getActiveFilterModes();
         if(selectedFilters.length) {
-            const today = new Date();
-            today.setHours(0,0,0,0);
             filtered = filtered.filter(c => selectedFilters.some(mode => {
                 const s = findStatsForCard(c, stats) || {};
-                if(mode === 'due') return s.dueDate && s.dueDate <= today.getTime();
+                if(mode === 'due') return isTodayReviewTarget(s);
                 return !!s[mode];
             }));
         }
@@ -4324,12 +4463,14 @@
             if(score === 2) data[id].correct++; 
             else if(score === 1) data[id].correct += 0.5; 
         }
+        const wasTodayReview = isTodayReviewTarget(sourceStats);
         data[id].history.push({
             id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
             score,
             result: score === 3 ? 'confirm' : undefined,
             type: score === 3 ? 'confirm' : undefined,
             points: historyPoints,
+            wasTodayReview,
             time: Date.now()
         });
         
@@ -4486,9 +4627,10 @@
         createDOMTree(tree, list);
     }
 
-    function toggleMenu() { 
+    function toggleMenu(force) {
         const sidebar = document.getElementById('sidebar'); const overlay = document.querySelector('.sidebar-overlay');
-        const isOpen = sidebar.classList.toggle('open'); overlay.classList.toggle('open');
+        const isOpen = typeof force === 'boolean' ? force : !sidebar.classList.contains('open');
+        sidebar.classList.toggle('open', isOpen); overlay.classList.toggle('open', isOpen);
         if (isOpen) { setTimeout(() => { const activeEl = document.querySelector('.active'); if (activeEl) { const top = activeEl.getBoundingClientRect().top + sidebar.scrollTop - sidebar.getBoundingClientRect().top; sidebar.scrollTo({ top: top - sidebar.clientHeight/2 + 20, behavior: 'auto' }); } }, 100); }
     }
 

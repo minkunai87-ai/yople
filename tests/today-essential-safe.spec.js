@@ -54,6 +54,24 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
   });
   expect(setup).toEqual({ statsCount: 11365, cardCount: 2000 });
 
+  const statsBeforeFilter = await page.evaluate(() => {
+    openLearningStats();
+    const model = buildLearningStatsModel();
+    return {
+      visible: document.getElementById('learning-stats-modal').style.display,
+      todayReview: model.totals.todayReview.size,
+      otherStudy: model.totals.otherStudy.size,
+      totalStudy: model.totals.totalStudy.size,
+      syntheticReview: model.decks.get('Synthetic').todayReview.size,
+      labels: document.getElementById('learning-stats-summary').innerText
+    };
+  });
+  expect(statsBeforeFilter).toMatchObject({
+    visible: 'flex', todayReview: 600, otherStudy: 0, totalStudy: 0, syntheticReview: 600
+  });
+  expect(statsBeforeFilter.labels).not.toContain('오늘 새로');
+  await page.evaluate(() => closeLearningStats());
+
   const safetyAndTiming = await page.evaluate(() => {
     localStorage.setItem(REVIEW_DURATION_STORAGE_KEY, '{broken');
     const corruptedFallback = getRepresentativeReviewSeconds();
@@ -156,6 +174,14 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
   expect(afterReviews.audit.deletes).toBe(0);
   expect(afterReviews.audit.metadataUpdates).toBe(0);
   expect(afterReviews.audit.blockedBackupCalls).toBeGreaterThanOrEqual(3);
+  expect(await page.evaluate(() => {
+    const model = buildLearningStatsModel();
+    return {
+      todayReview: model.totals.todayReview.size,
+      otherStudy: model.totals.otherStudy.size,
+      totalStudy: model.totals.totalStudy.size
+    };
+  })).toEqual({ todayReview: 600, otherStudy: 0, totalStudy: 3 });
   console.log('SAFE_REAPPLY_METRICS', JSON.stringify({
     candidateBuildMs: Math.round(safetyAndTiming.buildElapsedMs * 10) / 10,
     statsCount: afterReviews.statsCount,
@@ -178,7 +204,7 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
   await page.evaluate(() => document.getElementById('filter-essential').click());
   await page.click('#essential-release');
   expect(await page.evaluate(() => ({ active: todayEssentialState.active, count: activeDeck.length })))
-    .toEqual({ active: false, count: 597 });
+    .toEqual({ active: false, count: 600 });
 
   const completion = await page.evaluate(() => {
     openTodayEssentialSheet();
