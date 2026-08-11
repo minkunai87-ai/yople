@@ -60,6 +60,7 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
     return {
       visible: document.getElementById('learning-stats-modal').style.display,
       todayReview: model.totals.todayReview.size,
+      todayReviewDone: model.totals.todayReviewDone.size,
       otherStudy: model.totals.otherStudy.size,
       totalStudy: model.totals.totalStudy.size,
       syntheticReview: model.decks.get('Synthetic').todayReview.size,
@@ -67,8 +68,9 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
     };
   });
   expect(statsBeforeFilter).toMatchObject({
-    visible: 'flex', todayReview: 600, otherStudy: 0, totalStudy: 0, syntheticReview: 600
+    visible: 'flex', todayReview: 600, todayReviewDone: 0, otherStudy: 0, totalStudy: 0, syntheticReview: 600
   });
+  expect(statsBeforeFilter.labels).toContain('0 / 600');
   expect(statsBeforeFilter.labels).not.toContain('오늘 새로');
   await page.evaluate(() => closeLearningStats());
 
@@ -186,10 +188,11 @@ test('today essential keeps the canonical Stats store and never writes Firebase'
     const model = buildLearningStatsModel();
     return {
       todayReview: model.totals.todayReview.size,
+      todayReviewDone: model.totals.todayReviewDone.size,
       otherStudy: model.totals.otherStudy.size,
       totalStudy: model.totals.totalStudy.size
     };
-  })).toEqual({ todayReview: 600, otherStudy: 0, totalStudy: 3 });
+  })).toEqual({ todayReview: 600, todayReviewDone: 3, otherStudy: 0, totalStudy: 3 });
   console.log('SAFE_REAPPLY_METRICS', JSON.stringify({
     candidateBuildMs: Math.round(safetyAndTiming.buildElapsedMs * 10) / 10,
     statsCount: afterReviews.statsCount,

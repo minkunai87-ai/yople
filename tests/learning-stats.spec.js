@@ -47,9 +47,11 @@ vm.runInContext('function getHistoryItemTime(item) { return Number(item && item.
 const model = context.buildLearningStatsModel(now);
 assert.strictEqual(context.getUniqueLibraryCards().length, 4, 'cards are unique by UUID');
 assert.deepStrictEqual([...model.totals.todayReview].sort(), ['A','B','D'], 'remaining and completed review targets are included');
+assert.deepStrictEqual([...model.totals.todayReviewDone].sort(), ['B','D'], 'review numerator is target intersection today study');
 assert.deepStrictEqual([...model.totals.otherStudy], ['C'], 'non-review study is other');
 assert.deepStrictEqual([...model.totals.totalStudy].sort(), ['B','C','D'], 'multiple events count once per UUID');
 assert.deepStrictEqual([...model.decks.get('행정법').todayReview].sort(), ['A','B'], 'top deck includes descendants');
+assert.deepStrictEqual([...model.decks.get('행정법').todayReviewDone], ['B'], 'top deck numerator includes completed descendant targets');
 assert(readFunction('applyFilterAndSort').includes('isTodayReviewTarget(s)'), 'filter reuses common predicate');
 assert(readFunction('buildTodayEssentialCandidates').includes('isTodayReviewTarget(stat, todayStart)'), 'essential selector reuses common predicate');
 assert(!readFunction('buildLearningStatsModel').includes('setStorageItem'), 'statistics calculation is read-only');

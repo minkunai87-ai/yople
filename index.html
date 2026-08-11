@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.1 - 오늘 필수 완료 제외</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.2 - 복습 완료/전체</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.1 - 오늘 필수 완료 제외';
+    const APP_VERSION = 'Yople v11.23.2 - 복습 완료/전체';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3416,10 +3416,10 @@
 
     function buildLearningStatsModel(timestamp = Date.now()) {
         const stats = getStatsStore();
-        const totals = { todayReview:new Set(), otherStudy:new Set(), totalStudy:new Set() };
+        const totals = { todayReview:new Set(), todayReviewDone:new Set(), otherStudy:new Set(), totalStudy:new Set() };
         const decks = new Map();
         const ensureDeck = name => {
-            if(!decks.has(name)) decks.set(name, { todayReview:new Set(), otherStudy:new Set(), totalStudy:new Set() });
+            if(!decks.has(name)) decks.set(name, { todayReview:new Set(), todayReviewDone:new Set(), otherStudy:new Set(), totalStudy:new Set() });
             return decks.get(name);
         };
         getUniqueLibraryCards().forEach(card => {
@@ -3432,6 +3432,10 @@
             if(reviewTarget) {
                 totals.todayReview.add(id);
                 if(deckMetric) deckMetric.todayReview.add(id);
+                if(reviewedToday) {
+                    totals.todayReviewDone.add(id);
+                    if(deckMetric) deckMetric.todayReviewDone.add(id);
+                }
             }
             if(reviewedToday) {
                 totals.totalStudy.add(id);
@@ -3448,7 +3452,7 @@
     function renderLearningStats() {
         const model = buildLearningStatsModel();
         const renderMetrics = metric => `
-            <div class="learning-stats-summary-row"><span>오늘 복습</span><span class="learning-stats-value">${metric.todayReview.size}</span></div>
+            <div class="learning-stats-summary-row"><span>오늘 복습</span><span class="learning-stats-value">${metric.todayReviewDone.size} / ${metric.todayReview.size}</span></div>
             <div class="learning-stats-summary-row"><span>기타 학습</span><span class="learning-stats-value">${metric.otherStudy.size}</span></div>
             <div class="learning-stats-summary-row"><span>총 학습</span><span class="learning-stats-value">${metric.totalStudy.size}</span></div>`;
         document.getElementById('learning-stats-summary').innerHTML = renderMetrics(model.totals);
@@ -3456,7 +3460,7 @@
         document.getElementById('learning-stats-decks').innerHTML = rows.length ? rows.map(([deck, metric]) => `
             <section class="learning-stats-row">
                 <div class="learning-stats-deck">${escapeLearningStatsHtml(deck)}</div>
-                <div class="learning-stats-meta">오늘 복습 ${metric.todayReview.size} · 기타 학습 ${metric.otherStudy.size} · 총 학습 ${metric.totalStudy.size}</div>
+                <div class="learning-stats-meta">오늘 복습 ${metric.todayReviewDone.size} / ${metric.todayReview.size} · 기타 학습 ${metric.otherStudy.size} · 총 학습 ${metric.totalStudy.size}</div>
             </section>`).join('') : '<div class="learning-stats-empty">표시할 덱이 없습니다.</div>';
     }
 
