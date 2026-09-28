@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.3 - 좌표 캐시복구 보호</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.4 - 좌표 클라우드 병합</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.3 - 좌표 캐시복구 보호';
+    const APP_VERSION = 'Yople v11.23.4 - 좌표 클라우드 병합';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -4040,11 +4040,14 @@
                         if(!Number.isFinite(x) || !Number.isFinite(y)) return null;
                         return { x: Math.min(100, Math.max(0, x)), y: Math.min(100, Math.max(0, y)), updatedAt: Number(pin.updatedAt) || 0 };
                     }).filter(Boolean);
-                    if(!pins.length) return;
+                    const recordUpdatedAt = Math.max(Number(record && record.updatedAt) || 0, ...pins.map(pin => pin.updatedAt || 0), 0);
+                    const deleted = !!(record && record.deleted) && pins.length === 0;
+                    if(!pins.length && !deleted) return;
                     result[String(cardUuid)] = {
                         cardUuid: String(cardUuid),
                         pins,
-                        updatedAt: Math.max(Number(record && record.updatedAt) || 0, ...pins.map(pin => pin.updatedAt || 0))
+                        updatedAt: recordUpdatedAt,
+                        ...(deleted ? { deleted: true } : {})
                     };
                 } catch(error) {
                     console.warn('[Yople Image Pin Record Ignored]', { cardUuid, error: error && error.message ? error.message : String(error) });
@@ -4258,7 +4261,12 @@
                 if(!record || !record.pins[targetIndex]) return;
                 record.pins.splice(targetIndex, 1);
                 const changedAt = Date.now();
-                if(record.pins.length) record.updatedAt = changedAt; else delete stored[cardUuid];
+                if(record.pins.length) {
+                    record.updatedAt = changedAt;
+                    delete record.deleted;
+                } else {
+                    stored[cardUuid] = { cardUuid, pins: [], updatedAt: changedAt, deleted: true };
+                }
                 nextMoveIndex = 0; setImagePins(stored); refreshMarker(); suppressPlacementClickUntil = Date.now() + 700;
                 markLocalDataUpdated(changedAt); scheduleBackup('image-pin-delete'); showToast('좌표를 삭제했습니다.', 'success');
             }, 650);
@@ -4276,7 +4284,7 @@
             if(!rect.width || !rect.height || e.clientX < metrics.left || e.clientX > metrics.left + metrics.contentWidth || e.clientY < metrics.top || e.clientY > metrics.top + metrics.contentHeight) return;
             const stored = getImagePins(), changedAt = Date.now(), record = stored[cardUuid] || { cardUuid, pins: [], updatedAt: changedAt };
             record.pins.push({ x: Math.min(100, Math.max(0, (e.clientX - metrics.left) / metrics.contentWidth * 100)), y: Math.min(100, Math.max(0, (e.clientY - metrics.top) / metrics.contentHeight * 100)), updatedAt: changedAt });
-            record.updatedAt = changedAt; stored[cardUuid] = record; nextMoveIndex = 0;
+            record.updatedAt = changedAt; delete record.deleted; stored[cardUuid] = record; nextMoveIndex = 0;
             setImagePins(stored); renderImagePins(stage, img, record.pins);
             stage.classList.remove('pin-placement'); addButton.classList.remove('active');
             markLocalDataUpdated(changedAt); scheduleBackup('image-pin'); showToast('📍 위치를 추가했습니다.', 'success');
@@ -5167,17 +5175,80 @@
         }
     }
 
-    // 자동 시작 동기화에서는 로컬 좌표 키가 실제로 사라진 경우에만 클라우드 좌표를 복원한다.
-    // '{}'처럼 사용자가 의도적으로 빈 좌표 상태를 저장한 경우에는 클라우드의 오래된 좌표를 되살리지 않는다.
+    function getImagePinRecordTimestamp(record) {
+        return Math.max(Number(record && record.updatedAt) || 0, ...((record && record.pins) || []).map(pin => Number(pin && pin.updatedAt) || 0), 0);
+    }
+
+    function mergeImagePinsSafely(localPins = {}, cloudPins = {}) {
+        const local = normalizeImagePins(localPins);
+        const cloud = normalizeImagePins(cloudPins);
+        const merged = {};
+        let localContribution = false;
+        let cloudContribution = false;
+        const ids = new Set([...Object.keys(local), ...Object.keys(cloud)]);
+        ids.forEach(cardUuid => {
+            const localRecord = local[cardUuid];
+            const cloudRecord = cloud[cardUuid];
+            if(!localRecord) {
+                merged[cardUuid] = structuredClone(cloudRecord);
+                cloudContribution = true;
+                return;
+            }
+            if(!cloudRecord) {
+                merged[cardUuid] = structuredClone(localRecord);
+                localContribution = true;
+                return;
+            }
+            if(stableStringify(localRecord) === stableStringify(cloudRecord)) {
+                merged[cardUuid] = structuredClone(localRecord);
+                return;
+            }
+            const localTime = getImagePinRecordTimestamp(localRecord);
+            const cloudTime = getImagePinRecordTimestamp(cloudRecord);
+            if(cloudTime > localTime) {
+                merged[cardUuid] = structuredClone(cloudRecord);
+                cloudContribution = true;
+            } else {
+                merged[cardUuid] = structuredClone(localRecord);
+                localContribution = true;
+            }
+        });
+        return { pins: merged, localContribution, cloudContribution };
+    }
+
+    // 자동 시작 동기화에서는 빈 로컬 키 여부가 아니라 카드별 updatedAt을 비교한다.
+    // Firebase에만 있는 좌표는 가져오고, 로컬이 더 최신이면 유지한다. 삭제 tombstone도 동일하게 최신 기록이 이긴다.
     function restoreImagePinsFromBackupIfMissing(raw = {}, source = 'auto-restore') {
-        const localRaw = getStorageItem(STORAGE_KEY_IMAGE_PINS);
-        if(localRaw !== null) {
+        const candidate = getBackupImagePinsCandidate(raw);
+        if(candidate === null) {
             const localPins = getImagePins();
             const pinCount = Object.values(localPins).reduce((sum, record) => sum + (record.pins || []).length, 0);
-            console.log('[Yople Image Pins Restore]', { source, action: 'local-present-keep-local', cardCount: Object.keys(localPins).length, pinCount });
-            return { ok: true, action: 'local-present', cardCount: Object.keys(localPins).length, pinCount };
+            console.log('[Yople Image Pins Restore]', { source, action: 'cloud-absent-keep-local', cardCount: Object.keys(localPins).length, pinCount });
+            return { ok: true, action: 'cloud-absent', cardCount: Object.keys(localPins).length, pinCount };
         }
-        return restoreImagePinsFromBackup(raw, `${source}-missing-local`);
+        try {
+            const localPins = getImagePins();
+            const merged = mergeImagePinsSafely(localPins, candidate);
+            const normalizedMerged = normalizeImagePins(merged.pins);
+            const changed = stableStringify(normalizeImagePins(localPins)) !== stableStringify(normalizedMerged);
+            if(changed) setImagePins(normalizedMerged);
+            const pinCount = Object.values(normalizedMerged).reduce((sum, record) => sum + (record.pins || []).length, 0);
+            const tombstoneCount = Object.values(normalizedMerged).filter(record => record && record.deleted).length;
+            console.log('[Yople Image Pins Restore]', {
+                source,
+                action: changed ? 'merged' : 'already-synced',
+                localContribution: merged.localContribution,
+                cloudContribution: merged.cloudContribution,
+                cardCount: Object.keys(normalizedMerged).length,
+                pinCount,
+                tombstoneCount
+            });
+            if(changed && merged.localContribution && merged.cloudContribution) scheduleBackup('image-pin-startup-merge');
+            return { ok: true, action: changed ? 'merged' : 'already-synced', cardCount: Object.keys(normalizedMerged).length, pinCount, tombstoneCount };
+        } catch(error) {
+            console.warn('[Yople Image Pins Merge Ignored]', { source, error: error && error.message ? error.message : String(error) });
+            return { ok: false, action: 'ignored', error: error && error.message ? error.message : String(error) };
+        }
     }
 
     function applyRestoredState(payload = {}, source = 'restore', options = {}) {
