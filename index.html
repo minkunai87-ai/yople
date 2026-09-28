@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.4 - 좌표 클라우드 병합</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.5 - 로컬백업 전체복구</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.4 - 좌표 클라우드 병합';
+    const APP_VERSION = 'Yople v11.23.5 - 로컬백업 전체복구';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -5971,8 +5971,46 @@
         currentIndex = 0; saveCurrentProgress(); showCard(); 
     }
     
-    function getYokiLocalBackupData() {
-        const data = { appId: APP_CONFIG.id, exportedAt: Date.now(), appVersion: APP_VERSION };
+    async function getYokiLocalBackupData() {
+        await waitForPendingStatsWrites();
+
+        const memoryStats = structuredClone(getStatsStore() || {});
+        if(Object.keys(memoryStats).length) {
+            const saved = await saveStatsToIndexedDBFallback(memoryStats);
+            if(saved !== true) throw new Error('LOCAL_BACKUP_STATS_INDEXEDDB_SAVE_FAILED');
+            await waitForPendingStatsWrites();
+        }
+
+        let indexedStats = {};
+        try {
+            indexedStats = await readStatsFromIndexedDBForBackup();
+        } catch(error) {
+            if(!Object.keys(memoryStats).length) throw error;
+            console.warn('[Yople Local Backup] IndexedDB read fallback to memory Stats', error);
+            indexedStats = structuredClone(memoryStats);
+        }
+
+        const backupStats = Object.keys(indexedStats || {}).length ? indexedStats : memoryStats;
+        if(Object.keys(memoryStats).length &&
+            stableStringify(normalizeStatsForSourceComparison(memoryStats)) !== stableStringify(normalizeStatsForSourceComparison(backupStats))) {
+            throw new Error('LOCAL_BACKUP_STATS_VERIFY_MISMATCH');
+        }
+
+        const imagePins = getImagePins();
+        const imagePinCardCount = Object.values(imagePins).filter(record => record && !record.deleted && Array.isArray(record.pins) && record.pins.length).length;
+        const imagePinCount = Object.values(imagePins).reduce((sum, record) => sum + (record && !record.deleted && Array.isArray(record.pins) ? record.pins.length : 0), 0);
+        const data = {
+            appId: APP_CONFIG.id,
+            exportedAt: Date.now(),
+            appVersion: APP_VERSION,
+            localBackupSchemaVersion: 2,
+            stats: structuredClone(backupStats || {}),
+            statsCount: Object.keys(backupStats || {}).length,
+            statsHistoryCardCount: countStatsHistoryCards(backupStats || {}),
+            imagePinsByCardUuid: structuredClone(imagePins),
+            imagePinCardCount,
+            imagePinCount
+        };
         for(let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if(key && key.startsWith(APP_CONFIG.storagePrefix)) data[key] = localStorage.getItem(key);
@@ -6057,7 +6095,30 @@
         showCard();
     }
 
-    function exportData() { const d = new Date(); const fileName = `yople_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.json`; const a = document.createElement('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(getYokiLocalBackupData())], {type:'application/json'})); a.download=fileName; a.click(); }
+    async function exportData() {
+        try {
+            showToast('로컬 백업 생성 중: 정답률과 좌표를 확인하고 있습니다.', 'normal');
+            const data = await getYokiLocalBackupData();
+            const d = new Date();
+            const fileName = `yople_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.json`;
+            const url = URL.createObjectURL(new Blob([JSON.stringify(data)], {type:'application/json'}));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            console.log('[Yople Local Backup Export]', {
+                statsCount: data.statsCount,
+                historyCardCount: data.statsHistoryCardCount,
+                imagePinCardCount: data.imagePinCardCount,
+                imagePinCount: data.imagePinCount
+            });
+            showToast(`💾 백업 완료 · 정답률 ${data.statsCount}장 · 좌표 ${data.imagePinCount}개`, 'success');
+        } catch(error) {
+            console.error('[Yople Local Backup Export Error]', error);
+            showToast(`로컬 백업 실패: ${error && error.message ? error.message : error}`, 'error');
+        }
+    }
     function parseBackupField(value, fallback) {
         try {
             if(value === undefined || value === null || value === '') return fallback;
@@ -6099,28 +6160,89 @@
         });
     }
 
-    function importData(input) { 
-        const reader = new FileReader(); 
-        reader.onload = e => { 
-            const data = JSON.parse(e.target.result); 
-            logLocalBackupDebug(data, 'read');
-            if(data.appId !== APP_CONFIG.id) { showToast('Yople 백업 파일이 아닙니다.', 'error'); return; }
-            const restoredStats = getBackupStatsCandidate(data);
-            setStorageItem(STORAGE_KEY_STATS, JSON.stringify(restoredStats));
+    function getLocalBackupImagePinsCandidate(data = {}) {
+        if(Object.prototype.hasOwnProperty.call(data, 'imagePinsByCardUuid')) {
+            return normalizeImagePins(data.imagePinsByCardUuid);
+        }
+        if(Object.prototype.hasOwnProperty.call(data, STORAGE_KEY_IMAGE_PINS)) {
+            return normalizeImagePins(parseBackupField(data[STORAGE_KEY_IMAGE_PINS], {}));
+        }
+        return null;
+    }
+
+    async function restoreLocalBackupData(data) {
+        if(!data || data.appId !== APP_CONFIG.id) throw new Error('INVALID_LOCAL_BACKUP_APP_ID');
+        const snapshot = captureLocalRestoreSnapshot();
+        const restoredStats = getBackupStatsCandidate(data);
+        const hasStats = Object.keys(restoredStats || {}).length > 0;
+        const imagePinsCandidate = getLocalBackupImagePinsCandidate(data);
+        try {
             Object.keys(data).forEach(k => {
-                if(k === STORAGE_KEY_STATS || k === 'stats') return;
-                if(k.startsWith(APP_CONFIG.storagePrefix)) localStorage.setItem(k, typeof data[k] === 'string' ? data[k] : JSON.stringify(data[k]));
-            }); 
-            const storedStats = parseBackupField(getStorageItem(STORAGE_KEY_STATS), {});
+                if(k === STORAGE_KEY_STATS || k === 'stats' || k === STORAGE_KEY_IMAGE_PINS) return;
+                if(!k.startsWith(APP_CONFIG.storagePrefix)) return;
+                const value = typeof data[k] === 'string' ? data[k] : JSON.stringify(data[k]);
+                if(setStorageItem(k, value) === false) throw new Error(`LOCAL_BACKUP_STORAGE_SAVE_FAILED ${k}`);
+            });
+
+            if(imagePinsCandidate !== null) setImagePins(imagePinsCandidate);
+
+            if(hasStats) {
+                inMemoryStatsStore = structuredClone(restoredStats);
+                lastStatsMemoryChangedAt = Date.now();
+                const saved = await saveStatsToIndexedDBFallback(restoredStats);
+                if(saved !== true) throw new Error('LOCAL_BACKUP_STATS_RESTORE_SAVE_FAILED');
+                await waitForPendingStatsWrites();
+                const persistedStats = await readStatsFromIndexedDBForBackup();
+                if(stableStringify(normalizeStatsForSourceComparison(persistedStats)) !==
+                    stableStringify(normalizeStatsForSourceComparison(restoredStats))) {
+                    throw new Error('LOCAL_BACKUP_STATS_RESTORE_VERIFY_FAILED');
+                }
+                removeStorageItem(STORAGE_KEY_STATS);
+            } else {
+                console.warn('[Yople Local Backup Restore]', 'backup has no Stats; current Stats preserved');
+            }
+
+            const restoredPins = getImagePins();
+            const pinCardCount = Object.values(restoredPins).filter(record => record && !record.deleted && Array.isArray(record.pins) && record.pins.length).length;
+            const pinCount = Object.values(restoredPins).reduce((sum, record) => sum + (record && !record.deleted && Array.isArray(record.pins) ? record.pins.length : 0), 0);
             console.log('[Yople Local Backup Restore Check]', {
-                hasStoredStats: !!getStorageItem(STORAGE_KEY_STATS),
-                statsKeyCount: Object.keys(storedStats || {}).length,
-                historyCardCount: countStatsHistoryCards(storedStats)
+                statsIncluded: hasStats,
+                statsKeyCount: hasStats ? Object.keys(restoredStats).length : Object.keys(getStatsStore() || {}).length,
+                historyCardCount: hasStats ? countStatsHistoryCards(restoredStats) : countStatsHistoryCards(getStatsStore() || {}),
+                imagePinCardCount: pinCardCount,
+                imagePinCount: pinCount
             });
             isDataChanged = true;
-            location.reload(); 
+            if(hasStats) showToast(`📂 복구 완료 · 정답률 ${Object.keys(restoredStats).length}장 · 좌표 ${pinCount}개`, 'success');
+            else showToast(`📂 좌표/설정 복구 완료 · 좌표 ${pinCount}개 · 이 백업에는 정답률 Stats가 없습니다.`, 'normal');
+            setTimeout(() => location.reload(), 500);
+            return true;
+        } catch(error) {
+            console.error('[Yople Local Backup Restore Error]', error);
+            await rollbackLocalRestoreSnapshot(snapshot).catch(rollbackError => console.error('[Yople Local Backup Rollback Error]', rollbackError));
+            throw error;
+        }
+    }
+
+    function importData(input) { 
+        const file = input && input.files && input.files[0];
+        if(!file) return;
+        const reader = new FileReader(); 
+        reader.onload = async e => { 
+            try {
+                const data = JSON.parse(e.target.result); 
+                logLocalBackupDebug(data, 'read');
+                if(data.appId !== APP_CONFIG.id) { showToast('Yople 백업 파일이 아닙니다.', 'error'); return; }
+                await restoreLocalBackupData(data);
+            } catch(error) {
+                console.error('[Yople Local Backup Import Error]', error);
+                showToast(`로컬 백업 복구 실패: ${error && error.message ? error.message : error}`, 'error');
+            } finally {
+                input.value = '';
+            }
         }; 
-        reader.readAsText(input.files[0]); 
+        reader.onerror = () => { showToast('로컬 백업 파일을 읽지 못했습니다.', 'error'); input.value = ''; };
+        reader.readAsText(file); 
     }
     document.addEventListener('click', (e) => {
         const panel = document.getElementById('slider-panel');
