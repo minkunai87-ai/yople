@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.5 - 로컬백업 전체복구</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.6 - 긴급복구 호환</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.5 - 로컬백업 전체복구';
+    const APP_VERSION = 'Yople v11.23.6 - 긴급복구 호환';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -1968,7 +1968,17 @@
         if(!statsCount || statsCount !== Number(data.statsCount)) throw new Error('INVALID_BACKUP_STATS_COUNT');
         const structural = validateBackupStatsStructure(data, stats);
         const cardValidation = validateStatsCardIds(stats);
-        if(!cardValidation.valid) throw new Error(`INVALID_BACKUP_CARD_IDS ${cardValidation.invalid.join(',')}`);
+        if(!cardValidation.valid && !options.allowCardIdMismatch) {
+            throw new Error(`INVALID_BACKUP_CARD_IDS ${cardValidation.invalid.join(',')}`);
+        }
+        if(!cardValidation.valid && options.allowCardIdMismatch) {
+            window.__YOPLE_LAST_RESTORE_CARD_ID_MISMATCH__ = {
+                invalidSample: cardValidation.invalid,
+                libraryCardCount: cardValidation.libraryCardCount,
+                backupStatsCount: statsCount
+            };
+            console.warn('[Yople Backup Card ID Mismatch Allowed]', window.__YOPLE_LAST_RESTORE_CARD_ID_MISMATCH__);
+        }
         const localCount = Object.keys(getStatsStore() || {}).length;
         if(!options.allowSmaller && localCount >= 100 && statsCount < localCount * 0.5 && localCount - statsCount >= 100) throw new Error('RESTORE_BLOCKED_RAPID_STATS_DROP');
         const storedChecksum = String(data.integrity.checksum).toLowerCase();
@@ -1985,7 +1995,16 @@
         window.__YOPLE_LAST_CHECKSUM_DIAGNOSTIC__ = { storedChecksum, attempts, matchedMode: matched && matched.mode || '', summary: structural.summary };
         console.log('[Yople Backup Checksum]', window.__YOPLE_LAST_CHECKSUM_DIAGNOSTIC__);
         if(!matched) throw new Error(`INVALID_BACKUP_CHECKSUM stored=${storedChecksum} calculated=${attempts.map(item => `${item.mode}:${item.checksum}`).join(',')}`);
-        return { stats, statsCount, checksum: matched.checksum, checksumMode: matched.mode, summary: structural.summary };
+        return {
+            stats,
+            statsCount,
+            checksum: matched.checksum,
+            checksumMode: matched.mode,
+            summary: structural.summary,
+            cardIdMismatch: !cardValidation.valid,
+            invalidCardIds: cardValidation.invalid,
+            libraryCardCount: cardValidation.libraryCardCount
+        };
     }
 
     function getBackupErrorMessage(code) {
@@ -2425,7 +2444,19 @@
             const targetData = await res.json();
             if(!targetData || typeof targetData !== 'object') throw new Error('Firebase restore data is empty');
             if(!isYokiBackupRecord(targetData, normalizedBackupPath)) throw new Error(`Blocked non-Yople backup restore: ${targetData.appId || 'unknown'}`);
-            const validation = await validateBackupData(targetData, { allowSmaller: !!options.allowSmaller });
+            const validation = await validateBackupData(targetData, {
+                allowSmaller: !!options.allowSmaller,
+                // Manual restore is a user-selected recovery action. A changed/removed card ID
+                // must not block restoration of every other valid stat/note/pin in the backup.
+                // Automatic startup sync remains strict unless explicitly overridden.
+                allowCardIdMismatch: !isAutoPull || !!options.allowCardIdMismatch
+            });
+            if(validation.cardIdMismatch && !isAutoPull) {
+                console.warn('[Yople Emergency Restore]', {
+                    message: 'Card ID mismatch detected; continuing manual recovery.',
+                    invalidCardIds: validation.invalidCardIds
+                });
+            }
             logYokiStorageDiagnostics('before-firebase-restore', targetData);
             const normalizedManualPayload = normalizeBackupPayload(targetData, isAutoPull ? 'auto-restore' : 'manual-restore', ts, normalizedBackupPath);
             applyRestoredState(normalizedManualPayload, normalizedManualPayload.source);
@@ -2462,7 +2493,11 @@
                 currentCardId: getCurrentCardId()
             });
             isDataChanged = false;
-            showToast("☁️ 복구 완료", "success");
+            if(validation.cardIdMismatch && !isAutoPull) {
+                showToast(`☁️ 호환 복구 완료 · 현재 덱과 다른 카드 ID가 있어도 나머지 데이터를 복구했습니다.`, "success");
+            } else {
+                showToast("☁️ 복구 완료", "success");
+            }
             return true;
         } catch(e) { 
             console.error('[Firebase Restore Error]', e);
@@ -2913,7 +2948,9 @@
     }
 
     function migrateLoadedLibraryStatsToYokiIds(context = 'library') {
-        const stats = parseJSONSafe(getStorageItem(STORAGE_KEY_STATS), {});
+        // Stats may intentionally live only in memory/IndexedDB because localStorage is skipped
+        // for quota protection. Reading localStorage here made restored Stats look empty.
+        const stats = structuredClone(getStatsStore() || {});
         const report = createYokiIdMigrationReport();
         let statsMigrated = false;
 
@@ -2931,7 +2968,9 @@
         });
 
         if(statsMigrated) {
-            setStorageItem(STORAGE_KEY_STATS, JSON.stringify(stats));
+            inMemoryStatsStore = structuredClone(stats);
+            lastStatsMemoryChangedAt = Date.now();
+            statsPersistencePromise = saveStatsToIndexedDBFallback(inMemoryStatsStore);
             isDataChanged = true;
         }
 
