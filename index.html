@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.2 - 복습 완료/전체</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.3 - 좌표 캐시복구 보호</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.2 - 복습 완료/전체';
+    const APP_VERSION = 'Yople v11.23.3 - 좌표 캐시복구 보호';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -5167,7 +5167,20 @@
         }
     }
 
-    function applyRestoredState(payload = {}, source = 'restore') {
+    // 자동 시작 동기화에서는 로컬 좌표 키가 실제로 사라진 경우에만 클라우드 좌표를 복원한다.
+    // '{}'처럼 사용자가 의도적으로 빈 좌표 상태를 저장한 경우에는 클라우드의 오래된 좌표를 되살리지 않는다.
+    function restoreImagePinsFromBackupIfMissing(raw = {}, source = 'auto-restore') {
+        const localRaw = getStorageItem(STORAGE_KEY_IMAGE_PINS);
+        if(localRaw !== null) {
+            const localPins = getImagePins();
+            const pinCount = Object.values(localPins).reduce((sum, record) => sum + (record.pins || []).length, 0);
+            console.log('[Yople Image Pins Restore]', { source, action: 'local-present-keep-local', cardCount: Object.keys(localPins).length, pinCount });
+            return { ok: true, action: 'local-present', cardCount: Object.keys(localPins).length, pinCount };
+        }
+        return restoreImagePinsFromBackup(raw, `${source}-missing-local`);
+    }
+
+    function applyRestoredState(payload = {}, source = 'restore', options = {}) {
         console.log('RESTORE_START', { source });
         const raw = payload.raw || payload;
         const stats = payload.stats || getBackupStatsCandidate(raw);
@@ -5209,7 +5222,8 @@
         const restoredUpdatedAt = Number(payload.updatedAt) || getLocalDataUpdatedAt();
         if(restoredUpdatedAt) markLocalDataUpdated(source === 'cloud' ? restoredUpdatedAt : Math.max(getLocalDataUpdatedAt(), restoredUpdatedAt));
         logStudyStateSnapshot('restore', { stats, reviewHistory, viewState: restoredViewState });
-        restoreImagePinsFromBackup(raw, source);
+        if(options.imagePinsMode === 'if-missing') restoreImagePinsFromBackupIfMissing(raw, source);
+        else restoreImagePinsFromBackup(raw, source);
         console.log('RESTORE_COMPLETE', { source, currentCardUuid: restoredViewState.currentCardUuid || restoredViewState.cardId || '' });
         return restoredViewState;
     }
@@ -5463,7 +5477,7 @@
             console.log('[Yople Startup Sync Comparison]', { local: decision.localMetrics, cloud: decision.cloudMetrics, merged: decision.mergedMetrics || null, ignored });
             console.log('[Yople Startup Sync Decision]', { action: decision.action, reason: decision.reason });
             if(decision.action === 'cloud' && cloudState) {
-                applyRestoredState({ ...cloudState, stats: decision.stats }, 'auto-cloud');
+                applyRestoredState({ ...cloudState, stats: decision.stats }, 'auto-cloud', { imagePinsMode: 'if-missing' });
                 await saveStatsToIndexedDBFallback(decision.stats);
                 setStorageItem(STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT, String(Date.now()));
                 showToast('더 최신인 클라우드 학습 데이터를 복원했습니다.', 'success');
@@ -5473,10 +5487,11 @@
                 setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(mergedReviewHistory));
                 await saveStatsToIndexedDBFallback(decision.stats);
                 markLocalDataUpdated(Math.max(decision.localMetrics.lastLearningAt, decision.cloudMetrics.lastLearningAt));
-                restoreImagePinsFromBackup(cloudState.raw || {}, 'auto-merge');
+                restoreImagePinsFromBackupIfMissing(cloudState.raw || {}, 'auto-merge');
                 showToast('로컬과 클라우드 학습 데이터를 안전하게 병합했습니다.', 'success');
             } else {
                 restorePosition(localState.viewState || {}, 'local');
+                if(cloudState) restoreImagePinsFromBackupIfMissing(cloudState.raw || {}, 'auto-local');
             }
             if(ignored.length) showToast(`손상되거나 안전하지 않은 클라우드 백업 ${ignored.length}개를 무시했습니다.`, 'warning');
             console.log('AUTO_SYNC_SOURCE', decision.action);
