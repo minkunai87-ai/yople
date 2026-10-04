@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople</title>
+<title>Yople v11.23.7 - Firebase JSON 다운로드</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -229,7 +229,7 @@
     .backup-item:last-child { border-bottom: none; }
     .backup-item:hover { background: var(--btn-hover); }
     .backup-date { color: #fab005; font-weight: bold; }
-    .backup-delete-btn { margin-left: 10px; border: 0; border-radius: 7px; padding: 6px 9px; background: #c92a2a; color: white; cursor: pointer; }
+    .backup-download-btn { margin-left: 10px; border: 0; border-radius: 7px; padding: 6px 9px; background: var(--input-bg); color: var(--text); cursor: pointer; font-size: 1rem; }
     
     #toast { position: fixed; bottom: -100px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 12px 24px; border-radius: 25px; font-size: 0.95rem; font-weight: bold; transition: all 0.3s ease; z-index: 20000; box-shadow: 0 5px 15px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 8px; pointer-events: none; opacity: 0; }
     #toast.show { bottom: 85px; opacity: 1; } 
@@ -292,7 +292,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.6 - 긴급복구 호환</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.7 - Firebase JSON 다운로드</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -560,7 +560,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.6 - 긴급복구 호환';
+    const APP_VERSION = 'Yople v11.23.7 - Firebase JSON 다운로드';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -2288,9 +2288,9 @@
                 const ts = record.ts;
                 const item = document.createElement('div'); item.className = 'backup-item'; const d = new Date(parseInt(ts));
                 const timeStr = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-                item.innerHTML = `<span><span class="backup-date">🕒 ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}]</small></span><button class="backup-delete-btn" type="button">삭제</button>`;
+                item.innerHTML = `<span><span class="backup-date">🕒 ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}]</small></span><button class="backup-download-btn" type="button" aria-label="JSON 다운로드" title="JSON 다운로드">⬇</button>`;
                 item.onclick = async () => { listUI.innerHTML = '<div style="padding:20px; text-align:center;">데이터를 복구 중입니다... 1초 대기!</div>'; await restoreFromFirebase(ts, false, record.path); };
-                item.querySelector('.backup-delete-btn').onclick = event => { event.stopPropagation(); deleteFirebaseBackup(ts, record.path); };
+                item.querySelector('.backup-download-btn').onclick = event => { event.stopPropagation(); downloadFirebaseBackupJson(ts, record.path); };
                 listUI.appendChild(item);
                 item.querySelector('span').insertAdjacentHTML('beforeend', `<br><small class="backup-device" data-backup-key="${record.path}:${ts}" style="color:var(--text-sub);">device loading...</small>`);
             });
@@ -2389,17 +2389,46 @@
                     ? `${metadata.deviceName} · ${metadata.platform || 'Unknown'} · ${metadata.version || record.data.appVersion || ''}`
                     : (record.source === 'shallow' ? '정보 없음 · 클릭 시 검증' : `${record.data.appVersion || 'device unknown'}`);
                 const countText = record.data && record.data.statsKeyCount ? ` · stats ${record.data.statsKeyCount}` : '';
-                item.innerHTML = `<span><span class="backup-date">☁️ ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}${record.source === 'shallow' ? ' shallow' : ''}]</small><br><small style="color:var(--text-sub);">${detailText}${countText}</small></span><button class="backup-delete-btn" type="button">삭제</button>`;
+                item.innerHTML = `<span><span class="backup-date">☁️ ${timeStr}</span> 에 저장됨 <small style="color:var(--primary);">[${record.label}${record.source === 'shallow' ? ' shallow' : ''}]</small><br><small style="color:var(--text-sub);">${detailText}${countText}</small></span><button class="backup-download-btn" type="button" aria-label="JSON 다운로드" title="JSON 다운로드">⬇</button>`;
                 item.onclick = async () => {
                     listUI.innerHTML = '<div style="padding:20px; text-align:center;">해당 백업 다운로드 중...</div>';
                     await restoreFromFirebase(ts, false, record.path);
                 };
-                item.querySelector('.backup-delete-btn').onclick = event => { event.stopPropagation(); deleteFirebaseBackup(ts, record.path); };
+                item.querySelector('.backup-download-btn').onclick = event => { event.stopPropagation(); downloadFirebaseBackupJson(ts, record.path); };
                 listUI.appendChild(item);
             });
         } catch(e) {
             console.error('[Firebase Backup Index UI Error]', e);
             listUI.innerHTML = '<div style="padding:20px; text-align:center; color:#fa5252;">불러오기 실패. 앱을 새로고침 해주세요.</div>';
+        }
+    }
+
+    async function downloadFirebaseBackupJson(ts, backupPath = FIREBASE_BACKUP_PATH) {
+        try {
+            const normalizedBackupPath = assertYopleFirebasePath(backupPath);
+            if(normalizedBackupPath !== FIREBASE_BACKUP_PATH || !/^\d+$/.test(String(ts))) throw new Error('BLOCKED_INVALID_BACKUP_DOWNLOAD_TARGET');
+            const res = await firebaseRequest(`${normalizedBackupPath}/${ts}`, { cache: 'no-store' });
+            if(!res.ok) throw new Error(`Firebase backup download failed: ${res.status}`);
+            const data = await res.json();
+            if(!data || typeof data !== 'object') throw new Error('Firebase backup download data is empty');
+            const d = new Date(Number(ts));
+            const datePart = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+            const timePart = `${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `yople_backup_${datePart}_${timePart}.json`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 0);
+            showToast('JSON 백업을 다운로드했습니다.', 'success');
+            return true;
+        } catch(e) {
+            console.error('[Yople Firebase Backup Download Error]', e);
+            showToast(`JSON 다운로드 실패: ${e && e.message ? e.message : e}`, 'error');
+            return false;
         }
     }
 
