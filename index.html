@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.7 - Firebase JSON 다운로드</title>
+<title>Yople v11.23.8 - 정답률 토글 + 아이콘 그리드</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -155,12 +155,13 @@
     .badge-1d { background: #3f2e05; color: #ffd43b; border: 1px solid #ffd43b; } 
     .badge-old { background: #212529; color: #868e96; border: 1px solid #495057; } 
 
-    .icon-wrapper { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
-    .icon-row { display: flex; gap: 12px; }
-    .icon-btn { font-size: 1.4rem; cursor: pointer; background: none; border: none; padding: 0; line-height: 1; color: var(--text-sub); transition: 0.2s; opacity: 0.4; filter: grayscale(100%); }
-    .icon-btn.active { opacity: 1; filter: grayscale(0%); transform: scale(1.1); }
+    .icon-wrapper { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+    .icon-row { display: grid; grid-template-columns: repeat(4, 28px); gap: 8px; justify-content: end; }
+    .icon-btn { width: 28px; height: 28px; font-size: 1.4rem; cursor: pointer; background: none; border: none; padding: 0; line-height: 1; color: var(--text-sub); transition: 0.2s; opacity: 0.4; filter: grayscale(100%); display: flex; align-items: center; justify-content: center; }
+    .icon-btn.active { opacity: 1; filter: grayscale(0%); transform: scale(1.08); }
     .mem-btn.active { color: #ff8787; } .cmp-btn.active { color: #74c0fc; } .fav-btn.active { color: #ffd43b; }
     .num-btn.active { color: #66d9e8; } .date-btn.active { color: #b197fc; } .pen-btn.active { color: #ff6b6b; }
+    .rate-visibility-btn.active { color: #74c0fc; }
 
     .text-area { font-size: 1.35rem; line-height: 1.6; word-break: keep-all; white-space: pre-wrap; width: 100%; margin-bottom: 20px; color: var(--text) !important; font-weight: 500; position: relative; overflow-x: hidden; }
     .text-area * { color: inherit !important; max-width: 100% !important; box-sizing: border-box !important; }
@@ -292,7 +293,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.7 - Firebase JSON 다운로드</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.8 - 정답률 토글 + 아이콘 그리드</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -429,6 +430,7 @@
                                 <button class="icon-btn num-btn" id="num-btn" onclick="toggleTag(event, 'num')">🔢</button>
                                 <button class="icon-btn date-btn" id="date-btn" onclick="toggleTag(event, 'date')">📅</button>
                                 <button class="icon-btn pen-btn" id="pen-btn" onclick="toggleTag(event, 'pen')">🚨</button>
+                                <button class="icon-btn rate-visibility-btn" id="rate-visibility-btn" onclick="toggleRateVisibility(event)" aria-label="정답률 표시/숨김" title="정답률 표시/숨김" aria-pressed="true">👁️</button>
                             </div>
                         </div>
                     </div>
@@ -560,7 +562,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.7 - Firebase JSON 다운로드';
+    const APP_VERSION = 'Yople v11.23.8 - 정답률 토글 + 아이콘 그리드';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -629,6 +631,7 @@
     const STORAGE_KEY_MIGRATION_DONE = 'yople_storage_migration_v1_done';
     const STORAGE_KEY_LOCAL_DATA_UPDATED_AT = 'yople_local_data_updated_at';
     const STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT = 'yople_last_auto_cloud_sync_at';
+    const STORAGE_KEY_RATE_VISIBILITY = 'yople_rate_visibility_v1';
     const STORAGE_KEY_LAST_BACKUP_CHECKSUM = 'yople_last_backup_checksum';
     const STORAGE_KEY_LAST_BACKUP_AT = 'yople_last_backup_at';
     const FIREBASE_BACKUP_PATH = `${APP_CONFIG.firebaseRoot}/backups`;
@@ -936,6 +939,7 @@
     // Yople은 Yoki/Anki 키를 읽거나 마이그레이션하지 않는다.
 
     let targetRetention = parseFloat(getStorageItem(STORAGE_KEY_TARGET_RETENTION)) || 0.90;
+    let rateBadgeVisible = getStorageItem(STORAGE_KEY_RATE_VISIBILITY) !== '0';
 
     const cyrb53 = (str, seed = 0) => { let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed; for (let i = 0, ch; i < str.length; i++) { ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); } h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909); return 4294967296 * (2097151 & h2) + (h1 >>> 0); };
 
@@ -1649,6 +1653,7 @@
             document.title = APP_VERSION;
             const versionLabel = document.getElementById('app-version-label');
             if(versionLabel) versionLabel.innerText = APP_VERSION;
+            applyRateVisibility();
             updateTRButton();
             
             const savedSearch = getStorageItem(STORAGE_KEY_SEARCH_QUERY);
@@ -4641,6 +4646,28 @@
 
     function getVirtualDate(ts) { const d = new Date(ts); if(d.getHours() < 4) d.setDate(d.getDate()-1); d.setHours(0,0,0,0); return d; }
     
+    function applyRateVisibility() {
+        const wrap = document.querySelector('.rate-history-wrap');
+        const dropdown = document.getElementById('rate-history-dropdown');
+        const button = document.getElementById('rate-visibility-btn');
+        if(wrap) wrap.style.display = rateBadgeVisible ? 'inline-block' : 'none';
+        if(!rateBadgeVisible && dropdown) dropdown.classList.remove('open');
+        if(button) {
+            button.classList.toggle('active', rateBadgeVisible);
+            button.setAttribute('aria-pressed', rateBadgeVisible ? 'true' : 'false');
+            button.setAttribute('title', rateBadgeVisible ? '정답률 숨기기' : '정답률 보기');
+            button.setAttribute('aria-label', rateBadgeVisible ? '정답률 숨기기' : '정답률 보기');
+        }
+    }
+
+    function toggleRateVisibility(e) {
+        if(e) e.stopPropagation();
+        rateBadgeVisible = !rateBadgeVisible;
+        setStorageItem(STORAGE_KEY_RATE_VISIBILITY, rateBadgeVisible ? '1' : '0');
+        applyRateVisibility();
+        showToast(rateBadgeVisible ? '👁️ 정답률을 표시합니다.' : '🙈 정답률을 숨겼습니다.', 'normal');
+    }
+
     function updateStatsUI(s) {
         const b = document.getElementById('rate-badge');
         s = { ...s, ...getAccuracyStats(s) };
