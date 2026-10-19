@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.9 - 오늘 계획 + 동기화 -->
+<!-- preview: Yople v11.23.10 - 오늘 계획 2차 정렬 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.9 - 오늘 계획 + 동기화</title>
+<title>Yople v11.23.10 - 오늘 계획 2차 정렬</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -331,7 +331,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.9 - 오늘 계획 + 동기화</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.10 - 오늘 계획 2차 정렬</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -376,7 +376,6 @@
                             <option value="default">📋 전체</option>
                             <option value="due">🎯 오늘 복습</option>
                             <option value="essential">오늘 필수</option>
-                            <option value="new">오늘 새로</option>
                             <option value="mem">🧠 암기</option>
                             <option value="cmp">🆚 비교</option>
                             <option value="fav">⭐ 중요</option>
@@ -397,6 +396,17 @@
                             <option value="recent">🕘 최근순</option>
                         </select>
                     </div>
+                </div>
+                <div class="today-plan-field">
+                    <label for="today-plan-secondary-sort">2차 정렬</label>
+                    <select id="today-plan-secondary-sort" class="today-plan-select">
+                        <option value="none">없음</option>
+                        <option value="unlearned">🆕 미학습순</option>
+                        <option value="wrong">🔥 오답순</option>
+                        <option value="number">🔢 번호순</option>
+                        <option value="oldest">📅 오래된순</option>
+                        <option value="recent">🕘 최근순</option>
+                    </select>
                 </div>
                 <div id="today-plan-availability" class="today-plan-availability">필터 적용 총 문제: -</div>
                 <div class="today-plan-field">
@@ -663,7 +673,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.9 - 오늘 계획 + 동기화';
+    const APP_VERSION = 'Yople v11.23.10 - 오늘 계획 2차 정렬';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -1239,6 +1249,7 @@
         return { id: String(item.id || `yp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`),
             deckPath:String(item.deckPath || ''), deckMode:item.deckMode === 'group' ? 'group' : 'deck',
             filterMode:String(item.filterMode || 'default'), sortMode:String(item.sortMode || 'original'),
+            secondarySortMode:['unlearned','wrong','number','oldest','recent'].includes(item.secondarySortMode) ? item.secondarySortMode : 'none',
             targetCount:cardIds.length, cardIds, completedIds:cardIds.filter(id => completed.has(id)),
             createdAt:Number(item.createdAt) || Date.now(), carriedFrom:String(item.carriedFrom || '') };
     }
@@ -1375,30 +1386,48 @@
         const mode = config.filterMode || 'default';
         const start = getLocalTodayBounds().start;
         if(mode === 'essential') {
-            return cards.map((card,index) => ({card,index,stat:findStatsForCard(card,stats)||{}}))
+            cards = cards.map((card,index) => ({card,index,stat:findStatsForCard(card,stats)||{}}))
                 .filter(o => isTodayReviewTarget(o.stat,start) && !(o.stat.history || []).some(h=>isHistoryItemToday(h,start)))
                 .map(o => getTodayEssentialPriority(o.card,o.stat,o.index,start))
                 .sort((a,b)=> b.score-a.score || b.overdueDays-a.overdueDays || Number(b.latestWrong)-Number(a.latestWrong) || (a.lastDate||0)-(b.lastDate||0) || a.originalIndex-b.originalIndex)
                 .map(o=>o.card);
+        } else if(mode === 'new') {
+            // Keep the legacy filter readable for plans previously saved with it;
+            // it is no longer offered when creating or editing a plan.
+            cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{};
+                return !Number(s.total) && !(Array.isArray(s.history) && s.history.length) && !(Number(s.fsrs && s.fsrs.reps)>0); });
+        } else if(mode !== 'default') {
+            cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{};
+                return mode === 'due' ? isTodayReviewTarget(s,start) : !!s[mode]; });
         }
-        if(mode === 'new') cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{};
-            return !Number(s.total) && !(Array.isArray(s.history) && s.history.length) && !(Number(s.fsrs && s.fsrs.reps)>0); });
-        else if(mode !== 'default') cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{}; return mode === 'due' ? isTodayReviewTarget(s,start) : !!s[mode]; });
         const order = new Map(cards.map((c,i)=>[String(c.id),i]));
-        const rate = c => { const a=getAccuracyStats(findStatsForCard(c,stats)||{}); return a.total ? a.correct/a.total : 1; };
-        const seen = c=>Number(findStatsForCard(c,stats)?.lastDate)||0;
-        const unlearned = c=>!getAccuracyStats(findStatsForCard(c,stats)||{}).total;
+        const originalOrder = c => order.get(String(c.id)) ?? Number.MAX_SAFE_INTEGER;
+        const stat = c => findStatsForCard(c,stats)||{};
+        const rate = c => { const a=getAccuracyStats(stat(c)); return a.total ? a.correct/a.total : 1; };
+        const seen = c => Number(stat(c).lastDate)||0;
+        const unlearned = c => { const s=stat(c); return getAccuracyStats(s).total===0 || !Array.isArray(s.history) || !s.history.length; };
         const sortMode = config.sortMode || 'original';
+        const secondarySortMode = config.secondarySortMode || 'none';
         const hash = value => { let h=2166136261; for(let i=0;i<value.length;i++) h=Math.imul(h^value.charCodeAt(i),16777619); return h>>>0; };
+        const compare = (a,b,sort) => {
+            if(sort==='random') return hash(`${seed}:${a.id}`)-hash(`${seed}:${b.id}`);
+            if(sort==='unlearned') return Number(unlearned(b))-Number(unlearned(a));
+            if(sort==='wrong') return rate(a)-rate(b);
+            if(sort==='number') return compareByNumberOrder(a,b);
+            if(sort==='oldest') return (seen(a)||Number.MAX_SAFE_INTEGER)-(seen(b)||Number.MAX_SAFE_INTEGER);
+            if(sort==='recent') return seen(b)-seen(a);
+            if(sort==='original') return originalOrder(a)-originalOrder(b);
+            return 0;
+        };
         return cards.slice().sort((a,b)=>{
-            let diff=0;
-            if(sortMode==='random') diff=hash(`${seed}:${a.id}`)-hash(`${seed}:${b.id}`);
-            else if(sortMode==='unlearned') diff=Number(unlearned(b))-Number(unlearned(a));
-            else if(sortMode==='wrong') diff=rate(a)-rate(b);
-            else if(sortMode==='number') diff=compareByNumberOrder(a,b);
-            else if(sortMode==='oldest') diff=(seen(a)||Number.MAX_SAFE_INTEGER)-(seen(b)||Number.MAX_SAFE_INTEGER);
-            else if(sortMode==='recent') diff=seen(b)-seen(a);
-            return diff || (order.get(String(a.id))||0)-(order.get(String(b.id))||0);
+            // The ordinary deck UI treats original + secondary as a secondary-first ordering.
+            const primary = sortMode === 'original' && secondarySortMode !== 'none' ? 0 : compare(a,b,sortMode);
+            if(primary) return primary;
+            if(secondarySortMode !== 'none' && secondarySortMode !== sortMode) {
+                const secondary = compare(a,b,secondarySortMode);
+                if(secondary) return secondary;
+            }
+            return originalOrder(a)-originalOrder(b);
         });
     }
     function todayPlanReserved(store, except='') {
@@ -1424,7 +1453,7 @@
             const p=todayPlanProgress(item), percent=p.total ? Math.round(p.done/p.total*100) : 0;
             const filterLabel=({essential:'오늘 필수',new:'오늘 새로'})[item.filterMode]||modeNames[item.filterMode]||item.filterMode;
             const carry=item.carriedFrom?`<span class="today-plan-badge carry">🔁 ${todayPlanEscape(item.carriedFrom)} 이월</span>`:'';
-            return `<div class="today-plan-item${p.remaining?'':' done'}"><div class="today-plan-item-top"><div style="min-width:0"><div class="today-plan-deck">${todayPlanEscape(item.deckPath.replace(/__/g,' > '))}</div><div class="today-plan-badges"><span class="today-plan-badge">${item.deckMode==='group'?'상위/그룹 전체':'단일덱'}</span><span class="today-plan-badge">${todayPlanEscape(filterLabel)}</span><span class="today-plan-badge">${todayPlanEscape(modeNames[item.sortMode]||item.sortMode)}</span>${carry}</div></div><div class="today-plan-progress-text">${p.done}/${p.total}</div></div><div class="today-plan-progress-track"><div class="today-plan-progress-fill" style="width:${percent}%"></div></div><div class="today-plan-actions"><button class="today-plan-start" onclick="startTodayPlanItem('${todayPlanEscape(item.id)}')" ${p.remaining?'':'disabled'}>${p.remaining?'▶ 풀기 · '+p.remaining+'남음':'✅ 완료'}</button><button onclick="openTodayPlanEditor('${todayPlanEscape(item.id)}')">✏️</button><button onclick="deleteTodayPlanItem('${todayPlanEscape(item.id)}')">🗑</button></div></div>`;
+            return `<div class="today-plan-item${p.remaining?'':' done'}"><div class="today-plan-item-top"><div style="min-width:0"><div class="today-plan-deck">${todayPlanEscape(item.deckPath.replace(/__/g,' > '))}</div><div class="today-plan-badges"><span class="today-plan-badge">${item.deckMode==='group'?'상위/그룹 전체':'단일덱'}</span><span class="today-plan-badge">${todayPlanEscape(filterLabel)}</span><span class="today-plan-badge">${todayPlanEscape(modeNames[item.sortMode]||item.sortMode)}</span>${item.secondarySortMode!=='none'?`<span class="today-plan-badge">2차 ${todayPlanEscape(modeNames[item.secondarySortMode]||item.secondarySortMode)}</span>`:''}${carry}</div></div><div class="today-plan-progress-text">${p.done}/${p.total}</div></div><div class="today-plan-progress-track"><div class="today-plan-progress-fill" style="width:${percent}%"></div></div><div class="today-plan-actions"><button class="today-plan-start" onclick="startTodayPlanItem('${todayPlanEscape(item.id)}')" ${p.remaining?'':'disabled'}>${p.remaining?'▶ 풀기 · '+p.remaining+'남음':'✅ 완료'}</button><button onclick="openTodayPlanEditor('${todayPlanEscape(item.id)}')">✏️</button><button onclick="deleteTodayPlanItem('${todayPlanEscape(item.id)}')">🗑</button></div></div>`;
         }).join('') : '<div class="today-plan-empty">오늘 계획이 없습니다. 아래에서 추가할 수 있어요.</div>';
         todayPlanUpdateBadge(store);
     }
@@ -1436,8 +1465,9 @@
         const parent=item?item.deckPath.split('__')[0]:'';
         populateTodayPlanParentDecks(parent);
         if(item) populateTodayPlanSubDecks(`${item.deckMode}|${item.deckPath}`);
-        document.getElementById('today-plan-filter').value=item?.filterMode||'default';
+        document.getElementById('today-plan-filter').value=(item?.filterMode && item.filterMode!=='new')?item.filterMode:'default';
         document.getElementById('today-plan-sort').value=item?.sortMode||'original';
+        document.getElementById('today-plan-secondary-sort').value=item?.secondarySortMode||'none';
         document.getElementById('today-plan-target').value=item?.targetCount||30;
         document.getElementById('today-plan-form').classList.add('open');
         updateTodayPlanAvailableCount();
@@ -1446,17 +1476,18 @@
     function saveTodayPlanEditor() {
         const editId=document.getElementById('today-plan-edit-id').value, store=todayPlanCurrent(), old=store.items.find(i=>i.id===editId);
         const deck=todayPlanDeckSelection(), filterMode=document.getElementById('today-plan-filter').value, sortMode=document.getElementById('today-plan-sort').value;
+        const secondarySortMode=document.getElementById('today-plan-secondary-sort').value;
         const targetCount=Math.max(1,Math.floor(Number(document.getElementById('today-plan-target').value)||1));
         if(!deck.deckPath) {showToast('덱을 선택해주세요.','error');return;}
         const reserved=todayPlanReserved(store,editId),seed=`${store.date}:${old?.id||deck.deckPath}:${sortMode}`;
-        const candidates=todayPlanCandidates({...deck,filterMode,sortMode},seed).filter(card=>!reserved.has(String(card.id)));
+        const candidates=todayPlanCandidates({...deck,filterMode,sortMode,secondarySortMode},seed).filter(card=>!reserved.has(String(card.id)));
         const done=new Set(old?.completedIds||[]);
         // Keep eligible completed questions during edit; never lose completed progress silently.
         if(old) candidates.sort((a,b)=>Number(done.has(String(b.id)))-Number(done.has(String(a.id))));
         const selected=candidates.slice(0,targetCount).map(card=>String(card.id));
         if(!selected.length) {showToast('선택한 조건에 맞는 문제가 없거나 다른 계획에 모두 포함되어 있습니다.','error');return;}
         const item=todayPlanNormalizeItem({id:old?.id||`yp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
-            ...deck,filterMode,sortMode,cardIds:selected,completedIds:selected.filter(id=>done.has(id)),createdAt:old?.createdAt||Date.now(),carriedFrom:old?.carriedFrom||''});
+            ...deck,filterMode,sortMode,secondarySortMode,cardIds:selected,completedIds:selected.filter(id=>done.has(id)),createdAt:old?.createdAt||Date.now(),carriedFrom:old?.carriedFrom||''});
         if(old) store.items=store.items.map(i=>i.id===old.id?item:i); else store.items.push(item);
         if(!todayPlanWrite(store)) return;
         closeTodayPlanEditor();renderTodayPlan();
