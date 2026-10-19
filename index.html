@@ -1,11 +1,12 @@
 <!DOCTYPE html>
+<!-- preview: Yople v11.23.9 - 오늘 계획 + 동기화 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.8 - 정답률 토글 + 아이콘 그리드</title>
+<title>Yople v11.23.9 - 오늘 계획 + 동기화</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -248,6 +249,42 @@
     .note-body { color:var(--text); white-space:pre-wrap; word-break:break-word; line-height:1.45; font-size:0.92rem; margin-bottom:10px; }
     .note-jump-btn { border:0; border-radius:8px; padding:8px 12px; background:var(--primary); color:#111; font-weight:700; cursor:pointer; }
 
+    /* Today plan: isolated UI layer; existing study/card styles stay untouched. */
+    .today-plan-panel { width:min(94vw, 680px); max-height:88dvh; overflow:auto; }
+    .today-plan-summary { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 14px; border:1px solid var(--border); border-radius:12px; background:var(--input-bg); font-size:0.9rem; }
+    .today-plan-summary strong { color:var(--primary); font-size:1rem; }
+    .today-plan-list { display:flex; flex-direction:column; gap:10px; max-height:48dvh; overflow:auto; padding-right:2px; }
+    .today-plan-item { border:1px solid var(--border); border-radius:12px; padding:12px; background:var(--input-bg); }
+    .today-plan-item.done { border-color:#2f9e44; opacity:0.82; }
+    .today-plan-item-top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+    .today-plan-deck { min-width:0; font-weight:800; color:var(--text); overflow-wrap:anywhere; line-height:1.35; }
+    .today-plan-badges { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+    .today-plan-badge { padding:3px 7px; border-radius:999px; border:1px solid var(--border); background:#252525; color:var(--text-sub); font-size:0.72rem; font-weight:700; }
+    .today-plan-badge.carry { border-color:#8a6d1d; color:#ffd43b; }
+    .today-plan-progress-text { flex:0 0 auto; color:var(--primary); font-weight:800; white-space:nowrap; }
+    .today-plan-progress-track { width:100%; height:7px; margin-top:10px; border-radius:999px; background:#333; overflow:hidden; }
+    .today-plan-progress-fill { height:100%; background:var(--primary); border-radius:999px; transition:width .2s ease; }
+    .today-plan-actions { display:grid; grid-template-columns:1fr auto auto; gap:7px; margin-top:10px; }
+    .today-plan-actions button { min-height:38px; border-radius:9px; border:1px solid var(--border); background:#303030; color:var(--text); font-weight:800; cursor:pointer; }
+    .today-plan-actions .today-plan-start { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .today-plan-form { display:none; border-top:1px solid var(--border); padding-top:14px; }
+    .today-plan-form.open { display:block; }
+    .today-plan-field { margin-bottom:11px; }
+    .today-plan-field label { display:block; margin-bottom:6px; color:var(--text-sub); font-size:0.8rem; font-weight:800; }
+    .today-plan-select, .today-plan-number { width:100%; min-height:42px; border:1px solid var(--border); border-radius:9px; background:var(--input-bg); color:var(--text); padding:9px 10px; font-size:0.9rem; }
+    .today-plan-availability { margin:-1px 0 11px; padding:9px 11px; border:1px solid var(--border); border-radius:9px; background:#252525; color:var(--text-sub); font-size:0.82rem; line-height:1.4; }
+    .today-plan-availability strong { color:var(--primary); }
+    .today-plan-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .today-plan-empty { padding:22px 8px; text-align:center; color:var(--text-sub); border:1px dashed var(--border); border-radius:12px; }
+    .today-plan-menu-btn { position:relative; }
+    .today-plan-menu-count { float:right; color:var(--primary); }
+    @media (max-width:520px) {
+        .today-plan-panel { width:96vw; padding:18px 14px; }
+        .today-plan-form-grid { grid-template-columns:1fr; gap:0; }
+        .today-plan-actions { grid-template-columns:1fr 1fr 1fr; }
+    }
+
+
 </style>
 </head>
 <body>
@@ -275,6 +312,7 @@
             <span class="menu-label">최근 학습</span>
             <div class="recent-decks" id="recent-decks-ui"></div>
             <button class="btn-sub" onclick="openLearningStats()">📊 학습 통계</button>
+            <button class="btn-sub today-plan-menu-btn" onclick="openTodayPlanModal()">📅 오늘 계획 <span class="today-plan-menu-count" id="today-plan-menu-count"></span></button>
         </div>
         <div class="menu-section">
             <span class="menu-label">덱 관리</span>
@@ -293,7 +331,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.8 - 정답률 토글 + 아이콘 그리드</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.9 - 오늘 계획 + 동기화</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -307,6 +345,69 @@
                 <div id="learning-stats-summary"></div>
             </section>
             <div id="learning-stats-decks"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="today-plan-modal">
+        <div class="modal-content today-plan-panel">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                <h3 style="margin:0; color:var(--text);">📅 오늘 계획</h3>
+                <button class="modal-btn btn-cancel" style="padding:7px 11px;" onclick="closeTodayPlanModal()">닫기</button>
+            </div>
+            <div class="today-plan-summary" id="today-plan-summary"></div>
+            <div class="today-plan-list" id="today-plan-list"></div>
+            <button class="modal-btn btn-save" style="width:100%;" onclick="openTodayPlanEditor()">+ 오늘 계획 추가</button>
+            <div class="today-plan-form" id="today-plan-form">
+                <input type="hidden" id="today-plan-edit-id">
+                <div class="today-plan-form-grid">
+                    <div class="today-plan-field">
+                        <label for="today-plan-parent-deck">상위덱</label>
+                        <select id="today-plan-parent-deck" class="today-plan-select" onchange="populateTodayPlanSubDecks()"></select>
+                    </div>
+                    <div class="today-plan-field">
+                        <label for="today-plan-sub-deck">하위덱 / 범위</label>
+                        <select id="today-plan-sub-deck" class="today-plan-select" onchange="updateTodayPlanAvailableCount()"></select>
+                    </div>
+                </div>
+                <div class="today-plan-form-grid">
+                    <div class="today-plan-field">
+                        <label for="today-plan-filter">필터</label>
+                        <select id="today-plan-filter" class="today-plan-select" onchange="updateTodayPlanAvailableCount()">
+                            <option value="default">📋 전체</option>
+                            <option value="due">🎯 오늘 복습</option>
+                            <option value="essential">오늘 필수</option>
+                            <option value="new">오늘 새로</option>
+                            <option value="mem">🧠 암기</option>
+                            <option value="cmp">🆚 비교</option>
+                            <option value="fav">⭐ 중요</option>
+                            <option value="num">🔢 숫자</option>
+                            <option value="date">📅 날짜</option>
+                            <option value="pen">🚨 긴급</option>
+                        </select>
+                    </div>
+                    <div class="today-plan-field">
+                        <label for="today-plan-sort">1차 정렬</label>
+                        <select id="today-plan-sort" class="today-plan-select">
+                            <option value="original">🔄 원래순</option>
+                            <option value="random">🎲 랜덤</option>
+                            <option value="unlearned">🆕 미학습순</option>
+                            <option value="wrong">🔥 오답순</option>
+                            <option value="number">🔢 번호순</option>
+                            <option value="oldest">📅 오래된순</option>
+                            <option value="recent">🕘 최근순</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="today-plan-availability" class="today-plan-availability">필터 적용 총 문제: -</div>
+                <div class="today-plan-field">
+                    <label for="today-plan-target">오늘 풀 문제 수</label>
+                    <input id="today-plan-target" class="today-plan-number" type="number" min="1" step="1" value="30">
+                </div>
+                <div class="modal-btns">
+                    <button class="modal-btn btn-save" onclick="saveTodayPlanEditor()">저장</button>
+                    <button class="modal-btn btn-cancel" onclick="closeTodayPlanEditor()">취소</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -562,7 +663,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.8 - 정답률 토글 + 아이콘 그리드';
+    const APP_VERSION = 'Yople v11.23.9 - 오늘 계획 + 동기화';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -632,6 +733,7 @@
     const STORAGE_KEY_LOCAL_DATA_UPDATED_AT = 'yople_local_data_updated_at';
     const STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT = 'yople_last_auto_cloud_sync_at';
     const STORAGE_KEY_RATE_VISIBILITY = 'yople_rate_visibility_v1';
+    const STORAGE_KEY_TODAY_PLAN = 'yople_today_plan_v1';
     const STORAGE_KEY_LAST_BACKUP_CHECKSUM = 'yople_last_backup_checksum';
     const STORAGE_KEY_LAST_BACKUP_AT = 'yople_last_backup_at';
     const FIREBASE_BACKUP_PATH = `${APP_CONFIG.firebaseRoot}/backups`;
@@ -1120,6 +1222,298 @@
         if(type === 'success') toast.classList.add('success');
         toast.classList.add('show');
         setTimeout(() => { toast.classList.remove('show'); }, 3000);
+    }
+
+
+    // Yople Today Plan v1. Independent of Stats and image pin records.
+    const TODAY_PLAN_VERSION = 1;
+    let todayPlanSession = null; // {itemId, cardIds}; UI session only, never cloud-synced.
+    let todayPlanRefreshAt = 0;
+    let todayPlanNeedsCloudWrite = false;
+    const todayPlanEscape = text => String(text ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    function todayPlanDate(ts = Date.now()) { const date = new Date(ts); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`; }
+    function todayPlanEmpty() { return { version: TODAY_PLAN_VERSION, date: todayPlanDate(), updatedAt: 0, items: [] }; }
+    function todayPlanNormalizeItem(item) {
+        const cardIds = [...new Set((Array.isArray(item.cardIds) ? item.cardIds : []).map(String).filter(Boolean))];
+        const completed = new Set((Array.isArray(item.completedIds) ? item.completedIds : []).map(String));
+        return { id: String(item.id || `yp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`),
+            deckPath:String(item.deckPath || ''), deckMode:item.deckMode === 'group' ? 'group' : 'deck',
+            filterMode:String(item.filterMode || 'default'), sortMode:String(item.sortMode || 'original'),
+            targetCount:cardIds.length, cardIds, completedIds:cardIds.filter(id => completed.has(id)),
+            createdAt:Number(item.createdAt) || Date.now(), carriedFrom:String(item.carriedFrom || '') };
+    }
+    function todayPlanParse(raw) {
+        try {
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if(!parsed || Number(parsed.version) !== TODAY_PLAN_VERSION || !Array.isArray(parsed.items)) return null;
+            return { version:TODAY_PLAN_VERSION, date:String(parsed.date || todayPlanDate()), updatedAt:Number(parsed.updatedAt) || 0, items:parsed.items.map(todayPlanNormalizeItem) };
+        } catch(error) { return null; }
+    }
+    function todayPlanRead() { return todayPlanParse(getStorageItem(STORAGE_KEY_TODAY_PLAN)) || todayPlanEmpty(); }
+    function todayPlanWrite(store, backup = true) {
+        const normalized = { version:TODAY_PLAN_VERSION, date:String(store.date || todayPlanDate()), updatedAt: backup ? Date.now() : Number(store.updatedAt) || 0,
+            items:(store.items || []).map(todayPlanNormalizeItem) };
+        if(setStorageItem(STORAGE_KEY_TODAY_PLAN, JSON.stringify(normalized)) === false) {
+            showToast('오늘 계획 저장 실패: 기기 저장 공간을 확인해주세요.', 'error'); return null;
+        }
+        todayPlanUpdateBadge(normalized);
+        if(backup) { markLocalDataUpdated(Date.now()); scheduleBackup('today-plan'); }
+        return normalized;
+    }
+    function todayPlanCurrent() {
+        const store = todayPlanRead();
+        if(store.date === todayPlanDate()) return store;
+        const previousDate = store.date;
+        const carried = store.items.map(todayPlanNormalizeItem).map(item => {
+            const completed = new Set(item.completedIds);
+            const pending = item.cardIds.filter(id => !completed.has(id));
+            return pending.length ? { ...item, id:`yp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`, cardIds:pending, completedIds:[],
+                targetCount:pending.length, createdAt:Date.now(), carriedFrom:item.carriedFrom || previousDate } : null;
+        }).filter(Boolean);
+        todayPlanSession = null;
+        return todayPlanWrite({ ...store, date:todayPlanDate(), items:carried }) || todayPlanEmpty();
+    }
+    function todayPlanRemoteRaw(raw) {
+        if(!raw || typeof raw !== 'object') return null;
+        if(Object.prototype.hasOwnProperty.call(raw, 'todayPlan')) return raw.todayPlan;
+        if(raw.storage && Object.prototype.hasOwnProperty.call(raw.storage, STORAGE_KEY_TODAY_PLAN)) return raw.storage[STORAGE_KEY_TODAY_PLAN];
+        return null;
+    }
+    function todayPlanImportCloud(raw, force = false) {
+        const remote = todayPlanParse(todayPlanRemoteRaw(raw));
+        if(!remote) { // Old backups cannot erase plans; upload any local plan instead.
+            if(!force && todayPlanRead().items.length) {
+                if(isBooting) todayPlanNeedsCloudWrite = true; else scheduleBackup('today-plan-upgrade');
+            }
+            return false;
+        }
+        const local = todayPlanRead();
+        if(!force && remote.updatedAt <= local.updatedAt) {
+            // Local edits should be uploaded even when no card was graded.
+            if(remote.updatedAt < local.updatedAt) {
+                if(isBooting) todayPlanNeedsCloudWrite = true; else scheduleBackup('today-plan-local-newer');
+            }
+            return false;
+        }
+        if(JSON.stringify(remote) === JSON.stringify(local)) return false;
+        todayPlanSession = null;
+        return !!todayPlanWrite(remote, false);
+    }
+    async function todayPlanCheckCloudOnFocus() {
+        if(isBooting || restoreInProgress || isBackupInFlight || Date.now() - todayPlanRefreshAt < 60000) return;
+        todayPlanRefreshAt = Date.now();
+        try {
+            const idx = await firebaseRequest(FIREBASE_BACKUP_INDEX_PATH, { cache:'no-store', query:{ _t:Date.now() } });
+            if(!idx.ok) return;
+            const selected = selectSafeBackupIndexRecord(await idx.json() || {});
+            if(!selected) return;
+            const response = await firebaseRequest(`${FIREBASE_BACKUP_PATH}/${selected.ts}`, { cache:'no-store' });
+            if(!response.ok) return;
+            const raw = await response.json();
+            if(!raw || !isYokiBackupRecord(raw, FIREBASE_BACKUP_PATH)) return;
+            try { await validateBackupData(raw, { allowCardIdMismatch:false }); }
+            catch(error) { console.warn('[Yople Today Plan Cloud Verification]', error); return; }
+            const planBefore = todayPlanRead();
+            if(todayPlanImportCloud(raw)) {
+                if(todayPlanRead().updatedAt > planBefore.updatedAt) showToast('다른 기기의 최신 오늘 계획을 가져왔습니다.', 'success');
+            }
+            todayPlanUpdateBadge();
+        } catch(error) { console.warn('[Yople Today Plan Background Refresh]', error); }
+    }
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) todayPlanCheckCloudOnFocus(); });
+    function todayPlanProgress(item) { const done = item.completedIds.length; return { done, total:item.cardIds.length, remaining:item.cardIds.length-done }; }
+    function todayPlanUpdateBadge(store = todayPlanCurrent()) {
+        const el = document.getElementById('today-plan-menu-count'); if(!el) return;
+        const totals = store.items.reduce((acc,item) => { const p = todayPlanProgress(item); acc.done += p.done; acc.total += p.total; return acc; }, {done:0,total:0});
+        el.textContent = totals.total ? `${totals.done}/${totals.total}` : '';
+    }
+    function todayPlanDeckCards(deck, mode) {
+        const keys = Object.keys(library || {});
+        const cards = (mode === 'group' ? keys.filter(k => k === deck || k.startsWith(deck + '__')) : [deck])
+            .flatMap(k => Array.isArray(library[k]) ? library[k] : []);
+        const seen = new Set();
+        return cards.filter(card => { const id = String(card && card.id || ''); if(!id || seen.has(id)) return false; seen.add(id); return true; });
+    }
+    function todayPlanDeckOptions(parent) {
+        if(!parent) return [];
+        const keys = Object.keys(library || {}).filter(key => key === parent || key.startsWith(parent + '__'));
+        const paths = new Set([parent]);
+        keys.forEach(key => { const parts = key.split('__'); for(let i=1; i<=parts.length; i++) {
+            const path = parts.slice(0,i).join('__'); if(path === parent || path.startsWith(parent + '__')) paths.add(path);
+        }});
+        return [...paths].sort((a,b) => a.split('__').length - b.split('__').length || a.localeCompare(b,'ko')).flatMap(path => {
+            const children = keys.some(key => key.startsWith(path + '__'));
+            const direct = !!(library[path] && library[path].length);
+            const relative = path === parent ? '전체' : path.slice(parent.length + 2).replace(/__/g, ' > ');
+            const result = [];
+            if(children) result.push({ value:`group|${path}`, label:`📂 ${relative} (하위덱 포함)` });
+            if(direct) result.push({ value:`deck|${path}`, label:`📄 ${relative}${children ? ' (직접 카드)' : ''}` });
+            return result;
+        });
+    }
+    function populateTodayPlanParentDecks(selected = '') {
+        const el = document.getElementById('today-plan-parent-deck'); if(!el) return;
+        const parents = [...new Set(Object.keys(library || {}).map(key => key.split('__')[0]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'));
+        el.innerHTML = parents.map(parent => `<option value="${todayPlanEscape(parent)}">${todayPlanEscape(parent)}</option>`).join('');
+        if(selected && parents.includes(selected)) el.value=selected;
+        populateTodayPlanSubDecks();
+    }
+    function populateTodayPlanSubDecks(selected = '') {
+        const parent = document.getElementById('today-plan-parent-deck'); const el = document.getElementById('today-plan-sub-deck'); if(!parent || !el) return;
+        const options = todayPlanDeckOptions(parent.value);
+        el.innerHTML = options.map(o => `<option value="${todayPlanEscape(o.value)}">${todayPlanEscape(o.label)}</option>`).join('');
+        if(selected && options.some(o=>o.value===selected)) el.value=selected;
+        updateTodayPlanAvailableCount();
+    }
+    function todayPlanDeckSelection() {
+        const raw = String(document.getElementById('today-plan-sub-deck')?.value || '');
+        const sep = raw.indexOf('|'); return { deckMode: sep>=0 ? raw.slice(0,sep) : 'deck', deckPath:sep>=0 ? raw.slice(sep+1) : raw };
+    }
+    function todayPlanCandidates(config, seed = '') {
+        const stats = getStatsStore();
+        let cards = todayPlanDeckCards(config.deckPath, config.deckMode);
+        const mode = config.filterMode || 'default';
+        const start = getLocalTodayBounds().start;
+        if(mode === 'essential') {
+            return cards.map((card,index) => ({card,index,stat:findStatsForCard(card,stats)||{}}))
+                .filter(o => isTodayReviewTarget(o.stat,start) && !(o.stat.history || []).some(h=>isHistoryItemToday(h,start)))
+                .map(o => getTodayEssentialPriority(o.card,o.stat,o.index,start))
+                .sort((a,b)=> b.score-a.score || b.overdueDays-a.overdueDays || Number(b.latestWrong)-Number(a.latestWrong) || (a.lastDate||0)-(b.lastDate||0) || a.originalIndex-b.originalIndex)
+                .map(o=>o.card);
+        }
+        if(mode === 'new') cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{};
+            return !Number(s.total) && !(Array.isArray(s.history) && s.history.length) && !(Number(s.fsrs && s.fsrs.reps)>0); });
+        else if(mode !== 'default') cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{}; return mode === 'due' ? isTodayReviewTarget(s,start) : !!s[mode]; });
+        const order = new Map(cards.map((c,i)=>[String(c.id),i]));
+        const rate = c => { const a=getAccuracyStats(findStatsForCard(c,stats)||{}); return a.total ? a.correct/a.total : 1; };
+        const seen = c=>Number(findStatsForCard(c,stats)?.lastDate)||0;
+        const unlearned = c=>!getAccuracyStats(findStatsForCard(c,stats)||{}).total;
+        const sortMode = config.sortMode || 'original';
+        const hash = value => { let h=2166136261; for(let i=0;i<value.length;i++) h=Math.imul(h^value.charCodeAt(i),16777619); return h>>>0; };
+        return cards.slice().sort((a,b)=>{
+            let diff=0;
+            if(sortMode==='random') diff=hash(`${seed}:${a.id}`)-hash(`${seed}:${b.id}`);
+            else if(sortMode==='unlearned') diff=Number(unlearned(b))-Number(unlearned(a));
+            else if(sortMode==='wrong') diff=rate(a)-rate(b);
+            else if(sortMode==='number') diff=compareByNumberOrder(a,b);
+            else if(sortMode==='oldest') diff=(seen(a)||Number.MAX_SAFE_INTEGER)-(seen(b)||Number.MAX_SAFE_INTEGER);
+            else if(sortMode==='recent') diff=seen(b)-seen(a);
+            return diff || (order.get(String(a.id))||0)-(order.get(String(b.id))||0);
+        });
+    }
+    function todayPlanReserved(store, except='') {
+        const reserved = new Set();
+        store.items.forEach(item=>{ if(item.id===except) return; const done=new Set(item.completedIds);
+            item.cardIds.forEach(id=>{ if(!done.has(id)) reserved.add(id); }); });
+        return reserved;
+    }
+    function updateTodayPlanAvailableCount() {
+        const output = document.getElementById('today-plan-availability'); if(!output) return;
+        const deck = todayPlanDeckSelection(); if(!deck.deckPath) { output.textContent='필터 적용 총 문제: -'; return; }
+        const store = todayPlanCurrent();
+        const candidates=todayPlanCandidates({ ...deck, filterMode:document.getElementById('today-plan-filter').value });
+        const reserved=todayPlanReserved(store,document.getElementById('today-plan-edit-id').value);
+        const available=candidates.filter(card=>!reserved.has(String(card.id))).length;
+        output.innerHTML=`필터 적용 총 문제 <strong>${candidates.length}개</strong>`+(available!==candidates.length ? ` · 중복 제외 후 <strong>${available}개</strong>`:'');
+    }
+    function renderTodayPlan() {
+        const store=todayPlanCurrent(); const list=document.getElementById('today-plan-list'), summary=document.getElementById('today-plan-summary'); if(!list||!summary)return;
+        const total=store.items.reduce((a,i)=>{const p=todayPlanProgress(i);a.done+=p.done;a.total+=p.total;return a;},{done:0,total:0});
+        summary.innerHTML=`<span>오늘 전체</span><strong>${total.done} / ${total.total}</strong><span>남음 ${total.total-total.done}</span>`;
+        list.innerHTML=store.items.length ? store.items.map(item=>{
+            const p=todayPlanProgress(item), percent=p.total ? Math.round(p.done/p.total*100) : 0;
+            const filterLabel=({essential:'오늘 필수',new:'오늘 새로'})[item.filterMode]||modeNames[item.filterMode]||item.filterMode;
+            const carry=item.carriedFrom?`<span class="today-plan-badge carry">🔁 ${todayPlanEscape(item.carriedFrom)} 이월</span>`:'';
+            return `<div class="today-plan-item${p.remaining?'':' done'}"><div class="today-plan-item-top"><div style="min-width:0"><div class="today-plan-deck">${todayPlanEscape(item.deckPath.replace(/__/g,' > '))}</div><div class="today-plan-badges"><span class="today-plan-badge">${item.deckMode==='group'?'상위/그룹 전체':'단일덱'}</span><span class="today-plan-badge">${todayPlanEscape(filterLabel)}</span><span class="today-plan-badge">${todayPlanEscape(modeNames[item.sortMode]||item.sortMode)}</span>${carry}</div></div><div class="today-plan-progress-text">${p.done}/${p.total}</div></div><div class="today-plan-progress-track"><div class="today-plan-progress-fill" style="width:${percent}%"></div></div><div class="today-plan-actions"><button class="today-plan-start" onclick="startTodayPlanItem('${todayPlanEscape(item.id)}')" ${p.remaining?'':'disabled'}>${p.remaining?'▶ 풀기 · '+p.remaining+'남음':'✅ 완료'}</button><button onclick="openTodayPlanEditor('${todayPlanEscape(item.id)}')">✏️</button><button onclick="deleteTodayPlanItem('${todayPlanEscape(item.id)}')">🗑</button></div></div>`;
+        }).join('') : '<div class="today-plan-empty">오늘 계획이 없습니다. 아래에서 추가할 수 있어요.</div>';
+        todayPlanUpdateBadge(store);
+    }
+    function openTodayPlanModal() { closeTodayPlanEditor(); renderTodayPlan(); toggleMenu(false); document.getElementById('today-plan-modal').style.display='flex'; }
+    function closeTodayPlanModal() { document.getElementById('today-plan-modal').style.display='none'; closeTodayPlanEditor(); }
+    function openTodayPlanEditor(id='') {
+        const store=todayPlanCurrent(), item=store.items.find(i=>i.id===id);
+        document.getElementById('today-plan-edit-id').value=item?item.id:'';
+        const parent=item?item.deckPath.split('__')[0]:'';
+        populateTodayPlanParentDecks(parent);
+        if(item) populateTodayPlanSubDecks(`${item.deckMode}|${item.deckPath}`);
+        document.getElementById('today-plan-filter').value=item?.filterMode||'default';
+        document.getElementById('today-plan-sort').value=item?.sortMode||'original';
+        document.getElementById('today-plan-target').value=item?.targetCount||30;
+        document.getElementById('today-plan-form').classList.add('open');
+        updateTodayPlanAvailableCount();
+    }
+    function closeTodayPlanEditor() { document.getElementById('today-plan-form')?.classList.remove('open'); const el=document.getElementById('today-plan-edit-id'); if(el)el.value=''; }
+    function saveTodayPlanEditor() {
+        const editId=document.getElementById('today-plan-edit-id').value, store=todayPlanCurrent(), old=store.items.find(i=>i.id===editId);
+        const deck=todayPlanDeckSelection(), filterMode=document.getElementById('today-plan-filter').value, sortMode=document.getElementById('today-plan-sort').value;
+        const targetCount=Math.max(1,Math.floor(Number(document.getElementById('today-plan-target').value)||1));
+        if(!deck.deckPath) {showToast('덱을 선택해주세요.','error');return;}
+        const reserved=todayPlanReserved(store,editId),seed=`${store.date}:${old?.id||deck.deckPath}:${sortMode}`;
+        const candidates=todayPlanCandidates({...deck,filterMode,sortMode},seed).filter(card=>!reserved.has(String(card.id)));
+        const done=new Set(old?.completedIds||[]);
+        // Keep eligible completed questions during edit; never lose completed progress silently.
+        if(old) candidates.sort((a,b)=>Number(done.has(String(b.id)))-Number(done.has(String(a.id))));
+        const selected=candidates.slice(0,targetCount).map(card=>String(card.id));
+        if(!selected.length) {showToast('선택한 조건에 맞는 문제가 없거나 다른 계획에 모두 포함되어 있습니다.','error');return;}
+        const item=todayPlanNormalizeItem({id:old?.id||`yp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+            ...deck,filterMode,sortMode,cardIds:selected,completedIds:selected.filter(id=>done.has(id)),createdAt:old?.createdAt||Date.now(),carriedFrom:old?.carriedFrom||''});
+        if(old) store.items=store.items.map(i=>i.id===old.id?item:i); else store.items.push(item);
+        if(!todayPlanWrite(store)) return;
+        closeTodayPlanEditor();renderTodayPlan();
+        showToast(selected.length<targetCount?`가능한 ${selected.length}문제를 계획에 넣었습니다.`:(old?'계획을 수정했습니다.':'계획을 추가했습니다.'),'success');
+    }
+    function deleteTodayPlanItem(id) {
+        const store=todayPlanCurrent();if(!store.items.some(i=>i.id===id))return;
+        if(!confirm('이 오늘 계획을 삭제할까요? 정답률과 좌표는 삭제되지 않습니다.'))return;
+        store.items=store.items.filter(i=>i.id!==id);
+        if(todayPlanSession?.itemId===id)todayPlanSession=null;
+        todayPlanWrite(store);renderTodayPlan();showToast('계획만 삭제했습니다.','success');
+    }
+    function markTodayPlanCardCompleted(card) {
+        if(!card?.id) return false;
+        const store=todayPlanCurrent();let changed=false;
+        const id=String(card.id), candidates=new Set(getCardStatsCandidates(card).map(String)); candidates.add(id);
+        store.items=store.items.map(item=>{
+            if(item.completedIds.length===item.cardIds.length)return item;
+            const newlyCompleted=item.cardIds.filter(cid=>candidates.has(cid)&&!item.completedIds.includes(cid));
+            if(!newlyCompleted.length)return item;
+            changed=true;return {...item,completedIds:item.completedIds.concat(newlyCompleted)};
+        });
+        if(changed) {
+            todayPlanWrite({ ...store, updatedAt:Date.now() }, false);
+            // grading already invokes backupReviewNow, with this completed state included.
+            if(todayPlanSession && store.items.some(i=>i.id===todayPlanSession.itemId&&todayPlanProgress(i).remaining===0)) {
+                todayPlanSession=null;showToast('오늘 계획 항목 완료!','success');
+            }
+            if(document.getElementById('today-plan-modal')?.style.display==='flex')renderTodayPlan();
+            updateFilterStatusUI();
+        }
+        return changed;
+    }
+    function startTodayPlanItem(id) {
+        const store=todayPlanCurrent(),item=store.items.find(i=>i.id===id);if(!item)return;
+        const done=new Set(item.completedIds), remaining=item.cardIds.filter(cid=>!done.has(cid));
+        if(!remaining.length){showToast('이 계획은 모두 완료했습니다.');return;}
+        const source=todayPlanDeckCards(item.deckPath,item.deckMode), map=new Map();
+        source.forEach(card=>{map.set(String(card.id),card);(card.idCandidates||[]).forEach(cid=>map.set(String(cid),card));});
+        const cards=remaining.map(cid=>map.get(cid)).filter(Boolean);
+        if(!cards.length){showToast('계획의 문제를 찾지 못했습니다. 덱 데이터를 확인해주세요.','error');return;}
+        todayEssentialState.active=false;
+        todayPlanSession={itemId:id,cardIds:cards.map(card=>String(card.id))};
+        currentDeckName=item.deckPath;
+        originalDeck=source;
+        setHeaderDeckTitle(item.deckPath, item.deckMode);
+        currentFilterMode='default'; currentSortMode='original'; currentSecondarySortMode='none';
+        document.getElementById('search-input').value='';
+        setStorageItem(STORAGE_KEY_LAST_DECK,currentDeckName);
+        setStorageItem(STORAGE_KEY_LAST_DECK_MODE,item.deckMode);
+        setStorageItem(STORAGE_KEY_SEARCH_QUERY,'');
+        activeDeck=cards;
+        currentIndex=0;previousCardIndex=null;
+        saveFilterState();highlightFilter();updateFilterStatusUI();
+        persistCurrentViewState(true);
+        closeTodayPlanModal();showCard();
+        if(cards.length<remaining.length)showToast(`현재 덱에서 찾은 ${cards.length}문제만 표시합니다. 누락된 계획은 보존됩니다.`);
     }
 
     function openTRModal() {
@@ -1695,6 +2089,7 @@
             const loading = document.getElementById('loading');
             if(loading && Object.keys(library || {}).length) loading.style.display = 'none';
             isBooting = false;
+            if(todayPlanNeedsCloudWrite) { todayPlanNeedsCloudWrite = false; scheduleBackup('today-plan-local-newer'); }
             updateFullRecalcButtonState();
         }
     };
@@ -1857,7 +2252,7 @@
             STORAGE_KEY_LOCAL_EDITS, STORAGE_KEY_RECENT_DECKS, STORAGE_KEY_DECK_VIEW_STATES,
             STORAGE_KEY_SEARCH_QUERY, STORAGE_KEY_TARGET_RETENTION, STORAGE_KEY_NOTES,
             STORAGE_KEY_IMAGE_PINS,
-            STORAGE_KEY_REVIEW_HISTORY, REVIEW_DURATION_STORAGE_KEY
+            STORAGE_KEY_REVIEW_HISTORY, REVIEW_DURATION_STORAGE_KEY, STORAGE_KEY_TODAY_PLAN
         ];
         return Object.fromEntries(keys.map(key => [key, getStorageItem(key)]).filter(([, value]) => value !== null));
     }
@@ -1922,6 +2317,7 @@
             searchQuery: getStorageItem(STORAGE_KEY_SEARCH_QUERY) || '',
             viewState,
             todayEssential: getSerializableTodayEssentialState(),
+            todayPlan: todayPlanCurrent(),
             recentDecks: parseJSONSafe(getStorageItem(STORAGE_KEY_RECENT_DECKS), []),
             selectedDeckName: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
             selectedDeckPath: currentDeckName || getStorageItem(STORAGE_KEY_LAST_DECK) || '',
@@ -3192,6 +3588,7 @@
 
     function initApp() {
         renderRecentDecks();
+        todayPlanUpdateBadge();
         const isHistoryRestore = getStorageItem(STORAGE_KEY_RESTORE_PENDING) === '1';
         if(isHistoryRestore) setStorageItem(STORAGE_KEY_RESTORE_PENDING, '0');
         const savedViewState = getStartupViewState();
@@ -3659,6 +4056,7 @@
     }
 
     function openTodayEssentialSheet() {
+        todayPlanSession = null;
         const prepared = buildTodayEssentialCandidates();
         if(!prepared.candidates.length) {
             showToast('오늘 복습할 문제가 없습니다.');
@@ -3809,6 +4207,10 @@
             }
         }
         let filtered = [...originalDeck];
+        if(todayPlanSession && !isRestore) {
+            const allowed = new Set(todayPlanSession.cardIds);
+            filtered = filtered.filter(card => allowed.has(String(card.id)));
+        }
         
         const selectedFilters = getActiveFilterModes();
         if(selectedFilters.length) {
@@ -3889,7 +4291,7 @@
         const secondaryText = currentSecondarySortMode && currentSecondarySortMode !== 'none' ? ` + ${modeNames[currentSecondarySortMode]}` : '';
         document.getElementById('filter-status-text').innerText = todayEssentialState.active
             ? `오늘 필수 ${todayEssentialState.selectedCount}`
-            : `${modeNames[currentSortMode] || '🔄 원래순'}${secondaryText} & ${getFilterLabel()}`;
+            : `${todayPlanSession ? '📅 오늘 계획 · ' : ''}${modeNames[currentSortMode] || '🔄 원래순'}${secondaryText} & ${getFilterLabel()}`;
         const essentialChip = document.getElementById('filter-essential');
         if(essentialChip) essentialChip.classList.toggle('active', todayEssentialState.active);
     }
@@ -4021,6 +4423,7 @@
     }
 
     function selectDeck(name, isRestore = false) { 
+        todayPlanSession = null;
         todayEssentialState.active = false;
         currentDeckName = name; originalDeck = library[name] || []; setStorageItem(STORAGE_KEY_LAST_DECK, name);
         setStorageItem(STORAGE_KEY_LAST_DECK_MODE, 'deck');
@@ -4035,6 +4438,7 @@
     }
 
     function selectDeckGroup(prefix, isRestore = false) {
+        todayPlanSession = null;
         todayEssentialState.active = false;
         let merged = []; Object.keys(library).forEach(key => { if (key.startsWith(prefix) || key === prefix.replace('__', '')) merged = merged.concat(library[key]); });
         if (!merged.length) { return; }
@@ -4595,6 +4999,7 @@
         setItemSafe(STORAGE_KEY_STATS, JSON.stringify(data));
         saveStatsToIndexedDBFallback(data);
         markLocalDataUpdated(data[id].updatedAt);
+        markTodayPlanCardCompleted(card);
         saveStudyState('review', { backup: false });
         backupReviewNow();
         updateStatsUI(data[id]);
@@ -5356,7 +5761,7 @@
         if(reviewHistory && Object.keys(reviewHistory).length) setItemSafe(STORAGE_KEY_REVIEW_HISTORY, JSON.stringify(reviewHistory));
         if(raw.storage && typeof raw.storage === 'object') {
             Object.entries(raw.storage).forEach(([key, value]) => {
-                if(key.startsWith(APP_CONFIG.storagePrefix) && key !== STORAGE_KEY_STATS && key !== STORAGE_KEY_IMAGE_PINS && value !== null) setItemSafe(key, String(value));
+                if(key.startsWith(APP_CONFIG.storagePrefix) && key !== STORAGE_KEY_STATS && key !== STORAGE_KEY_IMAGE_PINS && key !== STORAGE_KEY_TODAY_PLAN && value !== null) setItemSafe(key, String(value));
             });
         }
         if(hasBackupField(raw, 'notesByCardUuid')) {
@@ -5384,6 +5789,7 @@
                 completedShown: false
             };
         }
+        if(source !== 'auto-cloud' && source !== 'cloud') todayPlanImportCloud(raw, true);
         const restoredViewState = restorePosition(payload.viewState || getBackupViewState(raw), source);
         const restoredUpdatedAt = Number(payload.updatedAt) || getLocalDataUpdatedAt();
         if(restoredUpdatedAt) markLocalDataUpdated(source === 'cloud' ? restoredUpdatedAt : Math.max(getLocalDataUpdatedAt(), restoredUpdatedAt));
@@ -5659,6 +6065,9 @@
                 restorePosition(localState.viewState || {}, 'local');
                 if(cloudState) restoreImagePinsFromBackupIfMissing(cloudState.raw || {}, 'auto-local');
             }
+            if(cloudState && cloudState.raw) todayPlanImportCloud(cloudState.raw);
+            todayPlanCurrent();
+            todayPlanUpdateBadge();
             if(ignored.length) showToast(`손상되거나 안전하지 않은 클라우드 백업 ${ignored.length}개를 무시했습니다.`, 'warning');
             console.log('AUTO_SYNC_SOURCE', decision.action);
             console.log('AUTO_SYNC_APPLIED', decision.action === 'cloud' || decision.action === 'merge');
@@ -6061,7 +6470,8 @@
         const q = document.getElementById('search-input').value.toLowerCase(); 
         setStorageItem(STORAGE_KEY_SEARCH_QUERY, q);
         if(!q) { applyFilterAndSort(true); return; } 
-        activeDeck = originalDeck.filter(c => c.q.toLowerCase().includes(q) || c.a.toLowerCase().includes(q)); 
+        const todayPlanAllowed = todayPlanSession ? new Set(todayPlanSession.cardIds) : null;
+        activeDeck = originalDeck.filter(c => (!todayPlanAllowed || todayPlanAllowed.has(String(c.id))) && (c.q.toLowerCase().includes(q) || c.a.toLowerCase().includes(q))); 
         removeStorageItem(STORAGE_KEY_ACTIVE_IDS);
         currentIndex = 0; saveCurrentProgress(); showCard(); 
     }
