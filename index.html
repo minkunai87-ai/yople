@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.11 - 확인 후 다음 문제 이동 -->
+<!-- preview: Yople v11.23.12 - 정답률·학습일 함께 숨김 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.11 - 확인 후 다음 문제 이동</title>
+<title>Yople v11.23.12 - 정답률·학습일 함께 숨김</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -163,6 +163,8 @@
     .mem-btn.active { color: #ff8787; } .cmp-btn.active { color: #74c0fc; } .fav-btn.active { color: #ffd43b; }
     .num-btn.active { color: #66d9e8; } .date-btn.active { color: #b197fc; } .pen-btn.active { color: #ff6b6b; }
     .rate-visibility-btn.active { color: #74c0fc; }
+    /* 눈 토글: 정답률과 마지막 학습일만 숨긴다. 복습 알림은 별도로 유지. */
+    .card-info.rate-details-hidden #date-badge { display: none !important; }
 
     .text-area { font-size: 1.35rem; line-height: 1.6; word-break: keep-all; white-space: pre-wrap; width: 100%; margin-bottom: 20px; color: var(--text) !important; font-weight: 500; position: relative; overflow-x: hidden; }
     .text-area * { color: inherit !important; max-width: 100% !important; box-sizing: border-box !important; }
@@ -331,7 +333,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.11 - 확인 후 다음 문제 이동</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.12 - 정답률·학습일 함께 숨김</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -541,7 +543,7 @@
                                 <button class="icon-btn num-btn" id="num-btn" onclick="toggleTag(event, 'num')">🔢</button>
                                 <button class="icon-btn date-btn" id="date-btn" onclick="toggleTag(event, 'date')">📅</button>
                                 <button class="icon-btn pen-btn" id="pen-btn" onclick="toggleTag(event, 'pen')">🚨</button>
-                                <button class="icon-btn rate-visibility-btn" id="rate-visibility-btn" onclick="toggleRateVisibility(event)" aria-label="정답률 표시/숨김" title="정답률 표시/숨김" aria-pressed="true">👁️</button>
+                                <button class="icon-btn rate-visibility-btn" id="rate-visibility-btn" onclick="toggleRateVisibility(event)" aria-label="정답률·학습일 표시/숨김" title="정답률·학습일 표시/숨김" aria-pressed="true">👁️</button>
                             </div>
                         </div>
                     </div>
@@ -673,7 +675,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.11 - 확인 후 다음 문제 이동';
+    const APP_VERSION = 'Yople v11.23.12 - 정답률·학습일 함께 숨김';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -5080,15 +5082,18 @@
     
     function applyRateVisibility() {
         const wrap = document.querySelector('.rate-history-wrap');
+        const cardInfo = document.getElementById('card-info');
         const dropdown = document.getElementById('rate-history-dropdown');
         const button = document.getElementById('rate-visibility-btn');
         if(wrap) wrap.style.display = rateBadgeVisible ? 'inline-block' : 'none';
+        // updateStatsUI()가 카드마다 학습일의 display를 갱신하더라도 숨김 상태가 유지되도록 CSS 클래스 사용.
+        if(cardInfo) cardInfo.classList.toggle('rate-details-hidden', !rateBadgeVisible);
         if(!rateBadgeVisible && dropdown) dropdown.classList.remove('open');
         if(button) {
             button.classList.toggle('active', rateBadgeVisible);
             button.setAttribute('aria-pressed', rateBadgeVisible ? 'true' : 'false');
-            button.setAttribute('title', rateBadgeVisible ? '정답률 숨기기' : '정답률 보기');
-            button.setAttribute('aria-label', rateBadgeVisible ? '정답률 숨기기' : '정답률 보기');
+            button.setAttribute('title', rateBadgeVisible ? '정답률·학습일 숨기기' : '정답률·학습일 보기');
+            button.setAttribute('aria-label', rateBadgeVisible ? '정답률·학습일 숨기기' : '정답률·학습일 보기');
         }
     }
 
@@ -5097,7 +5102,7 @@
         rateBadgeVisible = !rateBadgeVisible;
         setStorageItem(STORAGE_KEY_RATE_VISIBILITY, rateBadgeVisible ? '1' : '0');
         applyRateVisibility();
-        showToast(rateBadgeVisible ? '👁️ 정답률을 표시합니다.' : '🙈 정답률을 숨겼습니다.', 'normal');
+        showToast(rateBadgeVisible ? '👁️ 정답률·학습일을 표시합니다.' : '🙈 정답률·학습일을 숨겼습니다.', 'normal');
     }
 
     function updateStatsUI(s) {
