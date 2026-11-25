@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.14 - 확인 복습일 표시 -->
+<!-- preview: Yople v11.23.15 - 헤더 풀이 추천 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.14 - 확인 복습일 표시</title>
+<title>Yople v11.23.15 - 헤더 풀이 추천</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -202,7 +202,7 @@
     .grade-option { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
     .grade-preview { color:var(--text-sub); font-size:.72rem; text-align:center; font-weight:700; white-space:nowrap; min-height:1em; }
     .grade-option .g-btn { width:100%; }
-    .review-recommendation { font-size:.75rem; font-weight:700; padding:4px 7px; border-radius:6px; background:var(--input-bg); }
+    .review-recommendation { font: inherit; font-size:.70rem; line-height:1.25; font-weight:700; margin-top:2px; padding:0 4px; border:0; background:transparent; cursor:pointer; max-width:100%; white-space:nowrap; }
     .review-recommendation.required { color:#ff8787; } .review-recommendation.recommended { color:#ffd43b; }
     .review-recommendation.fast { color:#69db7c; } .review-recommendation.simple { color:var(--text-sub); }
     .g-btn:active { transform: scale(0.98); opacity: 0.9; }
@@ -340,7 +340,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.14 - 확인 복습일 표시</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.15 - 헤더 풀이 추천</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -481,6 +481,7 @@
                     <span id="cloud-icon" class="cloud-icon">🔥</span>
                 </div>
                 <div class="filter-status-text" id="filter-status-text">🔄 원래순 & 📋 전체</div>
+                <button type="button" id="review-recommendation" class="review-recommendation" style="display:none;" onclick="showReviewRecommendationReason(event)"></button>
             </div>
 
             <div class="header-controls">
@@ -538,7 +539,6 @@
                             </span>
                             <span class="date-badge" id="date-badge"></span>
                             <span class="date-badge" id="due-badge" style="display:none; margin-left: 2px;"></span>
-                            <span id="review-recommendation" class="review-recommendation" style="display:none;"></span>
                         </div>
                         <div class="icon-wrapper">
                             <div class="icon-row">
@@ -684,7 +684,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.14 - 확인 복습일 표시';
+    const APP_VERSION = 'Yople v11.23.15 - 헤더 풀이 추천';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -4664,7 +4664,7 @@
             reviewTimingState=null;
             document.getElementById('question-section').textContent=getActiveFilterModes().includes('due')?'남은 오늘 복습 문제가 없습니다.':'카드가 없습니다.';
             document.getElementById('card-counter').textContent='0 / 0';
-            ['card-info','answer-section','click-guide','divider','grade-area','nav-area'].forEach(id=>document.getElementById(id).style.display='none');
+            ['card-info','answer-section','click-guide','divider','grade-area','nav-area','review-recommendation'].forEach(id=>document.getElementById(id).style.display='none');
             return;
         }
         document.getElementById('card-info').style.display='flex';
@@ -5231,10 +5231,17 @@
         showToast(rateBadgeVisible ? '👁️ 정답률·학습일을 표시합니다.' : '🙈 정답률·학습일을 숨겼습니다.', 'normal');
     }
 
+    function showReviewRecommendationReason(event) {
+        event.stopPropagation();
+        const rec=event.currentTarget;
+        if(rec.title) showToast(rec.textContent+' · '+rec.title);
+    }
+
     function updateStatsUI(s) {
         const rec=document.getElementById('review-recommendation');
         const risk=getReviewRisk(s);
         rec.style.display='inline-block';rec.className=`review-recommendation ${risk.level}`;rec.textContent=risk.label;rec.title=risk.reasons.join(' · ');
+        rec.setAttribute('aria-label',risk.label+' · '+rec.title);
         const b = document.getElementById('rate-badge');
         s = { ...s, ...getAccuracyStats(s) };
         if(!s.total) { b.innerText="New"; b.className="rate-badge"; }
