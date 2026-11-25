@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.16 - 버튼 내 복습일 표시 -->
+<!-- preview: Yople v11.23.17 - 개인별 복습 간격 및 풀이 추천 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.16 - 버튼 내 복습일 표시</title>
+<title>Yople v11.23.17 - 개인별 복습 간격 및 풀이 추천</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -342,7 +342,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.16 - 버튼 내 복습일 표시</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.17 - 개인별 복습 간격 및 풀이 추천</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -686,7 +686,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.16 - 버튼 내 복습일 표시';
+    const APP_VERSION = 'Yople v11.23.17 - 개인별 복습 간격 및 풀이 추천';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3928,50 +3928,72 @@
         return isTodayReviewTarget(stat, timestamp) && !(Array.isArray(stat.history) && stat.history.some(item => isHistoryItemToday(item, timestamp)));
     }
 
+    // Risk is a heuristic for study triage, not a calibrated recall probability.
     function getReviewRisk(stat = {}, timestamp = Date.now()) {
-        const history = (Array.isArray(stat.history) ? stat.history : []).slice().sort((a,b) => getHistoryItemTime(a)-getHistoryItemTime(b));
-        const graded = history.filter(item => !isConfirmHistoryItem(item) && [0,1,2].includes(Number(item.score)));
-        const latest = graded[graded.length-1];
-        let consecutive = 0;
-        for(let i=history.length-1;i>=0 && isConfirmHistoryItem(history[i]);i--) consecutive++;
-        const accuracy = getAccuracyStats(stat);
-        const rate = accuracy.total ? accuracy.correct/accuracy.total : 0;
-        const lastGrade = latest ? getHistoryItemTime(latest) : 0;
-        const days = lastGrade ? Math.max(0,(timestamp-lastGrade)/86400000) : Infinity;
-        const stability = Number(stat.fsrs?.S) || 0;
-        // Heuristic estimate, not a claim of a calibrated FSRS probability.
-        const recall = lastGrade && stability>0 ? Math.pow(0.9,days/stability) : null;
-        const overdue = Math.max(0, Math.floor((getLocalTodayBounds(timestamp).start-(Number(stat.dueDate)||getLocalTodayBounds(timestamp).start))/86400000));
-        const reasons = [];
-        if(!latest) reasons.push('정식 채점 기록 없음');
-        if(latest && Number(latest.score)===0) reasons.push('최근 모름');
-        if(consecutive>=2) reasons.push(`연속 확인 ${consecutive}회`);
-        if(recall!==null && recall<Math.max(.7,targetRetention-.12)) reasons.push('망각 위험 높음');
-        if(overdue>=3) reasons.push(`복습 ${overdue}일 지연`);
-        if(reasons.length) return {level:'required',rank:3,label:'🔴 풀이 필수',reasons,consecutive,rate,recall,lastGrade,days,stability};
-        if(Number(latest?.score)===1 || (accuracy.total>=2 && rate<.8) || (recall!==null && recall<targetRetention) || consecutive===1 || overdue>0 || accuracy.total<3 || recall===null) {
-            if(Number(latest?.score)===1) reasons.push('최근 애매');
-            if(consecutive===1) reasons.push('직전 확인');
-            if(recall!==null && recall<targetRetention) reasons.push('목표 기억률 미달 추정');
-            if(!reasons.length) reasons.push('기억 안정성 확인 필요');
-            return {level:'recommended',rank:2,label:'🟡 풀이 권장',reasons,consecutive,rate,recall,lastGrade,days,stability};
+        const clamp=(n,min,max)=>Math.min(max,Math.max(min,n));
+        const history=(Array.isArray(stat.history)?stat.history:[]).slice().sort((a,b)=>getHistoryItemTime(a)-getHistoryItemTime(b));
+        const graded=history.filter(item=>!isConfirmHistoryItem(item)&&[0,1,2].includes(Number(item.score)));
+        const latest=graded[graded.length-1], recent=graded.slice(-5);
+        const confirmDays=new Set();
+        let firstConfirmTime=0;
+        for(let i=history.length-1;i>=0&&isConfirmHistoryItem(history[i]);i--){
+            const time=getHistoryItemTime(history[i]);
+            if(time>0){confirmDays.add(getLocalTodayBounds(time).start);firstConfirmTime=time;}
         }
-        const due = Number(stat.dueDate)||0;
-        const simple = due>getLocalTodayBounds(timestamp).start && recall!==null && recall>=targetRetention;
-        return {level:simple?'simple':'fast',rank:simple?0:1,label:simple?'⚪ 단순 확인 가능':'🟢 빠른 복습 권장',reasons:[simple?'복습 기한 전':'기억 안정적'],consecutive,rate,recall,lastGrade,days,stability};
+        const consecutive=confirmDays.size;
+        const accuracy=getAccuracyStats(stat), total=Number(accuracy.total)||0;
+        const rate=total?clamp(Number(accuracy.correct)/total,0,1):0;
+        const lastGrade=latest?getHistoryItemTime(latest):0;
+        const days=lastGrade?Math.max(0,(timestamp-lastGrade)/86400000):Infinity;
+        const stability=Math.max(0,Number(stat.fsrs?.S)||0);
+        const base=Math.max(1,stability*Math.log(targetRetention)/Math.log(.9));
+        const recall=lastGrade&&stability>0?Math.pow(.9,days/stability):null;
+        const due=Number(stat.dueDate)||0, today=getLocalTodayBounds(timestamp).start;
+        const overdue=due>0?Math.max(0,(today-due)/86400000):0;
+        let weight=0,weighted=0,wrongStreak=0;
+        recent.forEach((item,i)=>{const w=i+1;weight+=w;weighted+=w*Number(item.score)/2;});
+        for(let i=graded.length-1;i>=0&&Number(graded[i].score)===0;i--)wrongStreak++;
+        const recentRate=weight?weighted/weight:rate;
+        const performance=.6*recentRate+.4*rate;
+        const parts=[
+            {score:30*(1-recentRate),reason:'최근 풀이 성적'},
+            {score:15*(1-rate)*Math.min(1,total/4),reason:'누적 정답률'},
+            {score:latest?Math.min(14,Number(latest.score)===0?8+3*wrongStreak:Number(latest.score)===1?4:0):0,reason:wrongStreak>=2?'연속 오답':latest&&Number(latest.score)===0?'최근 모름':'최근 애매'},
+            {score:recall===null?5:25*clamp((targetRetention-recall+.04)/.45,0,1),reason:'예상 망각 위험'},
+            {score:Math.min(18,consecutive*4),reason:`연속 확인 ${consecutive}일`},
+            {score:lastGrade?8*clamp((days/base-1)/4,0,1):0,reason:'정식 풀이 공백'},
+            {score:8*clamp(overdue/Math.max(3,base),0,1),reason:'복습 지연'},
+            {score:total<3?5*(3-total)/3:0,reason:'학습 기록 부족'}
+        ];
+        const score=latest?clamp(parts.reduce((sum,p)=>sum+p.score,0),0,100):42;
+        const level=!latest?'recommended':score>=65?'required':score>=36?'recommended':due>today&&score<22?'simple':'fast';
+        const levels={required:[3,'🔴 풀이 필수'],recommended:[2,'🟡 풀이 권장'],fast:[1,'🟢 빠른 복습 권장'],simple:[0,'⚪ 단순 확인 가능']};
+        const reasons=!latest?['정식 채점 기록 없음']:parts.filter(p=>p.score>=4).sort((a,b)=>b.score-a.score).slice(0,3).map(p=>p.reason);
+        if(!reasons.length)reasons.push(level==='simple'?'복습 기한 전 · 기억 안정적':'최근 풀이 및 기억 상태 양호');
+        return {level,rank:levels[level][0],label:levels[level][1],reasons,score,consecutive,rate,recall,lastGrade,days,stability,base,performance,recentRate,wrongStreak,firstConfirmTime,total};
     }
 
+    // Quick confirmation only changes the due date, not accuracy or FSRS parameters.
+    // Its interval is independent of the recommendation label.
     function getFastConfirmSchedule(stat = {}, timestamp = Date.now()) {
-        const today = getLocalTodayBounds(timestamp).start;
-        const existing = Number(stat.dueDate)||0;
-        if(existing>today) return null; // Do not move a future due date simply by rereading.
-        const risk = getReviewRisk(stat,timestamp);
-        if(risk.level==='required') return null;
-        // Only extend a card that has been graded; max twice between actual grades.
-        const base = Math.max(1,Math.round(risk.stability*Math.log(targetRetention)/Math.log(.9)));
-        const cap = risk.rate>=.9 ? 7 : risk.rate>=.8 ? 5 : risk.rate>=.6 ? 3 : 1;
-        const interval = Math.max(1,Math.min(cap,Math.floor(base*.5)||1,risk.level==='recommended'?2:7));
-        return {interval,dueDate:today+interval*86400000};
+        const today=getLocalTodayBounds(timestamp).start, existing=Number(stat.dueDate)||0;
+        if(existing>today)return null;
+        const risk=getReviewRisk(stat,timestamp);
+        if(!risk.lastGrade)return null; // An ungraded card must not acquire a false FSRS schedule.
+        const p=risk.performance;
+        const cap=p>=.9?14:p>=.8?10:p>=.6?7:p>=.4?4:3;
+        const recallFactor=risk.recall===null?.75:.65+.35*risk.recall;
+        const repeatFactor=Math.max(.4,1-risk.consecutive*.13);
+        const raw=(1.5+p*3+Math.min(15,risk.base)*.55)*recallFactor*repeatFactor;
+        let interval=Math.max(1,Math.min(cap,Math.round(raw)));
+        if(risk.wrongStreak>=2)interval=Math.min(interval,2);
+        if(risk.consecutive>=5)interval=1;
+        if(risk.firstConfirmTime){
+            const deadline=getLocalTodayBounds(risk.firstConfirmTime).start+28*86400000;
+            interval=Math.min(interval,Math.max(1,Math.floor((deadline-today)/86400000)));
+        }
+        const next=new Date(today);next.setDate(next.getDate()+interval);
+        return {interval,dueDate:next.getTime()};
     }
 
     function predictGradeSchedule(stat = {}, score, cardId, timestamp = Date.now()) {
@@ -4151,7 +4173,7 @@
             riskRank: risk.rank,
             latestWrong,
             lastDate,
-            score: risk.rank * 1000 + Math.min(90,overdueDays) * 10 + recentWrongScore + consecutiveWrongScore + lowAccuracyScore + lastReviewedScore + earlyLearningScore
+            score: risk.score + Math.min(10,overdueDays) * .3
         };
     }
 
