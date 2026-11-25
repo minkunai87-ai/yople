@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.12 - 정답률·학습일 함께 숨김 -->
+<!-- preview: Yople v11.23.13 - 빠른 복습·풀이 추천 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.12 - 정답률·학습일 함께 숨김</title>
+<title>Yople v11.23.13 - 빠른 복습·풀이 추천</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -199,6 +199,12 @@
     .nav-btn { flex: 1; background: var(--input-bg); border: 1px solid var(--border); padding: 14px 0; border-radius: 12px; cursor: pointer; font-weight: bold; color: var(--text); font-size: 1rem; text-align: center; transition: 0.2s; }
     .nav-btn:active { background: var(--btn-hover); }
     .g-btn { flex: 1; padding: 16px 0; border: none; border-radius: 12px; font-weight: bold; color: white; cursor: pointer; font-size: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin: 0; text-align: center; }
+    .grade-option { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+    .grade-preview { color:var(--text-sub); font-size:.72rem; text-align:center; font-weight:700; white-space:nowrap; min-height:1em; }
+    .grade-option .g-btn { width:100%; }
+    .review-recommendation { font-size:.75rem; font-weight:700; padding:4px 7px; border-radius:6px; background:var(--input-bg); }
+    .review-recommendation.required { color:#ff8787; } .review-recommendation.recommended { color:#ffd43b; }
+    .review-recommendation.fast { color:#69db7c; } .review-recommendation.simple { color:var(--text-sub); }
     .g-btn:active { transform: scale(0.98); opacity: 0.9; }
     
     .bg-x { background: #fa5252; } .bg-tri { background: #fab005; } .bg-o { background: #40c057; } 
@@ -314,6 +320,7 @@
             <span class="menu-label">최근 학습</span>
             <div class="recent-decks" id="recent-decks-ui"></div>
             <button class="btn-sub" onclick="openLearningStats()">📊 학습 통계</button>
+            <button class="btn-sub" id="confirm-mode-menu" onclick="toggleConfirmMode()">확인 모드: 빠른 복습</button>
             <button class="btn-sub today-plan-menu-btn" onclick="openTodayPlanModal()">📅 오늘 계획 <span class="today-plan-menu-count" id="today-plan-menu-count"></span></button>
         </div>
         <div class="menu-section">
@@ -333,7 +340,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.12 - 정답률·학습일 함께 숨김</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.13 - 빠른 복습·풀이 추천</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -531,6 +538,7 @@
                             </span>
                             <span class="date-badge" id="date-badge"></span>
                             <span class="date-badge" id="due-badge" style="display:none; margin-left: 2px;"></span>
+                            <span id="review-recommendation" class="review-recommendation" style="display:none;"></span>
                         </div>
                         <div class="icon-wrapper">
                             <div class="icon-row">
@@ -560,10 +568,10 @@
     <div class="footer">
         <div class="footer-content">
             <div class="grade-btns" id="grade-area" style="display:none;">
-                <button class="g-btn bg-x" onclick="grade(0)">모름</button>
-                <button class="g-btn bg-tri" onclick="grade(1)">애매</button>
-                <button class="g-btn bg-o" onclick="grade(2)">맞음</button>
-                <button class="g-btn bg-chk" onclick="grade(3)">확인</button>
+                <div class="grade-option"><span class="grade-preview" id="grade-preview-0"></span><button class="g-btn bg-x" onclick="grade(0)">모름</button></div>
+                <div class="grade-option"><span class="grade-preview" id="grade-preview-1"></span><button class="g-btn bg-tri" onclick="grade(1)">애매</button></div>
+                <div class="grade-option"><span class="grade-preview" id="grade-preview-2"></span><button class="g-btn bg-o" onclick="grade(2)">맞음</button></div>
+                <div class="grade-option"><span class="grade-preview" id="grade-preview-3"></span><button class="g-btn bg-chk" id="confirm-grade-btn" onclick="handleConfirmClick(event)" style="touch-action:manipulation;user-select:none;-webkit-touch-callout:none;" title="길게 눌러 확인 모드 변경">빠른 확인</button></div>
             </div>
             <div class="nav-btns" id="nav-area">
                 <button class="nav-btn" onclick="moveCard(-1)">◀ 이전</button>
@@ -581,7 +589,8 @@
     <div class="essential-sheet-overlay" id="essential-sheet-overlay" onclick="closeTodayEssentialSheet(event)">
         <div class="essential-sheet" role="dialog" aria-modal="true" aria-labelledby="essential-sheet-title">
             <h3 id="essential-sheet-title">오늘 필수 복습</h3>
-            <p class="essential-description">오늘 복습 중 꼭 봐야 할 문제를 우선순위대로 골라드립니다.</p>
+            <p class="essential-description">오늘 복습 중 정식 채점이 필요한 문제(오답·망각 위험·연속 확인)를 우선 추천합니다.
+                <span id="essential-risk-summary" style="display:block;margin-top:6px;"></span></p>
             <div class="essential-presets">
                 <button class="essential-preset" data-seconds="1800" onclick="selectEssentialPreset(1800)">30분 · 약 0개</button>
                 <button class="essential-preset" data-seconds="3600" onclick="selectEssentialPreset(3600)">1시간 · 약 0개</button>
@@ -675,7 +684,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.12 - 정답률·학습일 함께 숨김';
+    const APP_VERSION = 'Yople v11.23.13 - 빠른 복습·풀이 추천';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -745,6 +754,7 @@
     const STORAGE_KEY_LOCAL_DATA_UPDATED_AT = 'yople_local_data_updated_at';
     const STORAGE_KEY_LAST_AUTO_CLOUD_SYNC_AT = 'yople_last_auto_cloud_sync_at';
     const STORAGE_KEY_RATE_VISIBILITY = 'yople_rate_visibility_v1';
+    const STORAGE_KEY_CONFIRM_MODE = 'yople_confirm_mode_v1';
     const STORAGE_KEY_TODAY_PLAN = 'yople_today_plan_v1';
     const STORAGE_KEY_LAST_BACKUP_CHECKSUM = 'yople_last_backup_checksum';
     const STORAGE_KEY_LAST_BACKUP_AT = 'yople_last_backup_at';
@@ -1054,6 +1064,7 @@
 
     let targetRetention = parseFloat(getStorageItem(STORAGE_KEY_TARGET_RETENTION)) || 0.90;
     let rateBadgeVisible = getStorageItem(STORAGE_KEY_RATE_VISIBILITY) !== '0';
+    let confirmMode = getStorageItem(STORAGE_KEY_CONFIRM_MODE) === 'simple' ? 'simple' : 'fast';
 
     const cyrb53 = (str, seed = 0) => { let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed; for (let i = 0, ch; i < str.length; i++) { ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); } h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909); return 4294967296 * (2097151 & h2) + (h1 >>> 0); };
 
@@ -1391,7 +1402,7 @@
             cards = cards.map((card,index) => ({card,index,stat:findStatsForCard(card,stats)||{}}))
                 .filter(o => isTodayReviewTarget(o.stat,start) && !(o.stat.history || []).some(h=>isHistoryItemToday(h,start)))
                 .map(o => getTodayEssentialPriority(o.card,o.stat,o.index,start))
-                .sort((a,b)=> b.score-a.score || b.overdueDays-a.overdueDays || Number(b.latestWrong)-Number(a.latestWrong) || (a.lastDate||0)-(b.lastDate||0) || a.originalIndex-b.originalIndex)
+                .sort((a,b)=> b.riskRank-a.riskRank || b.score-a.score || b.overdueDays-a.overdueDays || Number(b.latestWrong)-Number(a.latestWrong) || (a.lastDate||0)-(b.lastDate||0) || a.originalIndex-b.originalIndex)
                 .map(o=>o.card);
         } else if(mode === 'new') {
             // Keep the legacy filter readable for plans previously saved with it;
@@ -1400,7 +1411,7 @@
                 return !Number(s.total) && !(Array.isArray(s.history) && s.history.length) && !(Number(s.fsrs && s.fsrs.reps)>0); });
         } else if(mode !== 'default') {
             cards = cards.filter(card => { const s=findStatsForCard(card,stats)||{};
-                return mode === 'due' ? isTodayReviewTarget(s,start) : !!s[mode]; });
+                return mode === 'due' ? isPendingTodayReview(s,start) : !!s[mode]; });
         }
         const order = new Map(cards.map((c,i)=>[String(c.id),i]));
         const originalOrder = c => order.get(String(c.id)) ?? Number.MAX_SAFE_INTEGER;
@@ -1813,9 +1824,13 @@
         }).sort((a, b) => a.time - b.time || a.index - b.index);
 
         const fsrs = { D: 5.0, S: 0, reps: 0 };
-        let latestReviewTime = 0;
+        let latestReviewTime = 0, latestFast = null;
         for(const event of events) {
-            if(isConfirmHistoryItem(event.item)) continue;
+            if(isConfirmHistoryItem(event.item)) {
+                if(event.item.confirmMode==='fast' && Number(event.item.confirmDueDate)>0 && Number(event.item.confirmInterval)>0 && latestReviewTime) latestFast=event.item;
+                continue;
+            }
+            latestFast=null;
             fsrs.reps++;
             if(fsrs.reps === 1) {
                 if(event.score === 0) { fsrs.D = 7.0; fsrs.S = 1.0; }
@@ -1837,7 +1852,7 @@
         const baseDate = new Date(latestReviewTime);
         if(Number.isNaN(baseDate.getTime())) throw new Error('INVALID_LAST_REVIEW_DATE');
         baseDate.setHours(0, 0, 0, 0);
-        return { fsrs, interval, dueDate: baseDate.getTime() + interval * 86400000 };
+        return latestFast ? {fsrs, interval:Number(latestFast.confirmInterval), dueDate:Number(latestFast.confirmDueDate)} : { fsrs, interval, dueDate: baseDate.getTime() + interval * 86400000 };
     }
 
     async function performSafeFullFsrsRecalculation(newTargetRetention) {
@@ -2081,6 +2096,8 @@
             const versionLabel = document.getElementById('app-version-label');
             if(versionLabel) versionLabel.innerText = APP_VERSION;
             applyRateVisibility();
+            initializeConfirmButton();
+            updateConfirmModeUI();
             updateTRButton();
             
             const savedSearch = getStorageItem(STORAGE_KEY_SEARCH_QUERY);
@@ -3751,6 +3768,7 @@
             showCard();
             return true;
         }
+        if(currentDeckName && getActiveFilterModes().includes("due")) {showCard();return true;}
         const firstDeck = getFirstValidDeckName();
         if(firstDeck && currentDeckName !== firstDeck) {
             selectDeck(firstDeck, false);
@@ -3903,6 +3921,112 @@
         });
     }
 
+    // Keep historical daily totals intact; only the study queue excludes today's completed cards.
+    function isPendingTodayReview(stat = {}, timestamp = Date.now()) {
+        return isTodayReviewTarget(stat, timestamp) && !(Array.isArray(stat.history) && stat.history.some(item => isHistoryItemToday(item, timestamp)));
+    }
+
+    function getReviewRisk(stat = {}, timestamp = Date.now()) {
+        const history = (Array.isArray(stat.history) ? stat.history : []).slice().sort((a,b) => getHistoryItemTime(a)-getHistoryItemTime(b));
+        const graded = history.filter(item => !isConfirmHistoryItem(item) && [0,1,2].includes(Number(item.score)));
+        const latest = graded[graded.length-1];
+        let consecutive = 0;
+        for(let i=history.length-1;i>=0 && isConfirmHistoryItem(history[i]);i--) consecutive++;
+        const accuracy = getAccuracyStats(stat);
+        const rate = accuracy.total ? accuracy.correct/accuracy.total : 0;
+        const lastGrade = latest ? getHistoryItemTime(latest) : 0;
+        const days = lastGrade ? Math.max(0,(timestamp-lastGrade)/86400000) : Infinity;
+        const stability = Number(stat.fsrs?.S) || 0;
+        // Heuristic estimate, not a claim of a calibrated FSRS probability.
+        const recall = lastGrade && stability>0 ? Math.pow(0.9,days/stability) : null;
+        const overdue = Math.max(0, Math.floor((getLocalTodayBounds(timestamp).start-(Number(stat.dueDate)||getLocalTodayBounds(timestamp).start))/86400000));
+        const reasons = [];
+        if(!latest) reasons.push('정식 채점 기록 없음');
+        if(latest && Number(latest.score)===0) reasons.push('최근 모름');
+        if(consecutive>=2) reasons.push(`연속 확인 ${consecutive}회`);
+        if(recall!==null && recall<Math.max(.7,targetRetention-.12)) reasons.push('망각 위험 높음');
+        if(overdue>=3) reasons.push(`복습 ${overdue}일 지연`);
+        if(reasons.length) return {level:'required',rank:3,label:'🔴 풀이 필수',reasons,consecutive,rate,recall,lastGrade,days,stability};
+        if(Number(latest?.score)===1 || (accuracy.total>=2 && rate<.8) || (recall!==null && recall<targetRetention) || consecutive===1 || overdue>0 || accuracy.total<3 || recall===null) {
+            if(Number(latest?.score)===1) reasons.push('최근 애매');
+            if(consecutive===1) reasons.push('직전 확인');
+            if(recall!==null && recall<targetRetention) reasons.push('목표 기억률 미달 추정');
+            if(!reasons.length) reasons.push('기억 안정성 확인 필요');
+            return {level:'recommended',rank:2,label:'🟡 풀이 권장',reasons,consecutive,rate,recall,lastGrade,days,stability};
+        }
+        const due = Number(stat.dueDate)||0;
+        const simple = due>getLocalTodayBounds(timestamp).start && recall!==null && recall>=targetRetention;
+        return {level:simple?'simple':'fast',rank:simple?0:1,label:simple?'⚪ 단순 확인 가능':'🟢 빠른 복습 권장',reasons:[simple?'복습 기한 전':'기억 안정적'],consecutive,rate,recall,lastGrade,days,stability};
+    }
+
+    function getFastConfirmSchedule(stat = {}, timestamp = Date.now()) {
+        const today = getLocalTodayBounds(timestamp).start;
+        const existing = Number(stat.dueDate)||0;
+        if(existing>today) return null; // Do not move a future due date simply by rereading.
+        const risk = getReviewRisk(stat,timestamp);
+        if(risk.level==='required') return null;
+        // Only extend a card that has been graded; max twice between actual grades.
+        const base = Math.max(1,Math.round(risk.stability*Math.log(targetRetention)/Math.log(.9)));
+        const cap = risk.rate>=.9 ? 7 : risk.rate>=.8 ? 5 : risk.rate>=.6 ? 3 : 1;
+        const interval = Math.max(1,Math.min(cap,Math.floor(base*.5)||1,risk.level==='recommended'?2:7));
+        return {interval,dueDate:today+interval*86400000};
+    }
+
+    function predictGradeSchedule(stat = {}, score, cardId, timestamp = Date.now()) {
+        const old = stat.fsrs || {};
+        const fsrs = { ...old, D:Number(old.D)||5, S:Number(old.S)||0, reps:Number(old.reps)||0 };
+        fsrs.reps++;
+        if(fsrs.reps===1) {
+            fsrs.D=[7,6,5][score]; fsrs.S=[1,2,3][score];
+        } else {
+            fsrs.D=score===0?Math.min(10,fsrs.D+1.5):score===1?Math.min(10,fsrs.D+.5):Math.max(1,fsrs.D-.5);
+            fsrs.S=score===0?Math.max(1,fsrs.S*.2):fsrs.S*(score===1?1.2:1+.5*(11-fsrs.D));
+        }
+        const today=getLocalTodayBounds(timestamp).start;
+        let interval=Math.max(1,Math.round(fsrs.S*Math.log(targetRetention)/Math.log(.9)));
+        const fuzz=interval>=16?3:interval>=8?2:interval>=4?1:0;
+        if(fuzz) interval=Math.max(1,interval+(cyrb53(`${cardId}:${today}:${score}:${fsrs.reps}`)%(2*fuzz+1))-fuzz);
+        return {fsrs,interval,dueDate:today+interval*86400000};
+    }
+
+    function getConfirmPreview(stat, timestamp = Date.now()) {
+        const schedule=confirmMode==='fast'?getFastConfirmSchedule(stat,timestamp):null;
+        if(schedule) return `${schedule.interval}일 후`;
+        const due=Number(stat.dueDate)||0;
+        const days=Math.ceil((due-getLocalTodayBounds(timestamp).start)/86400000);
+        return due && days>0 ? `${days}일 후 유지` : '일정 유지';
+    }
+    function updateGradePreviews() {
+        const card=activeDeck[currentIndex]; if(!card) return;
+        const stat=getStats(card);
+        const now=Date.now();
+        for(let score=0;score<3;score++) document.getElementById(`grade-preview-${score}`).textContent=`${predictGradeSchedule(stat,score,card.id,now).interval}일 후`;
+        document.getElementById('grade-preview-3').textContent=getConfirmPreview(stat,now);
+    }
+    function updateConfirmModeUI() {
+        const label=confirmMode==='fast'?'빠른 복습':'단순 확인';
+        document.getElementById('confirm-mode-menu').textContent=`확인 모드: ${label} (변경)`;
+        document.getElementById('confirm-grade-btn').textContent=confirmMode==='fast'?'빠른 확인':'단순 확인';
+        updateGradePreviews();
+    }
+    function toggleConfirmMode() {
+        confirmMode=confirmMode==='fast'?'simple':'fast';
+        setStorageItem(STORAGE_KEY_CONFIRM_MODE,confirmMode);
+        updateConfirmModeUI(); showToast(confirmMode==='fast'?'빠른 복습 모드':'단순 확인 모드');
+    }
+    let confirmPressTimer=null, confirmLongPress=false;
+    function initializeConfirmButton() {
+        const button=document.getElementById('confirm-grade-btn');
+        const cancel=()=>{clearTimeout(confirmPressTimer);confirmPressTimer=null;};
+        button.addEventListener('pointerdown', e=>{if(e.button!==0)return;cancel();confirmLongPress=false;confirmPressTimer=setTimeout(()=>{confirmLongPress=true;toggleConfirmMode();},550);});
+        ['pointerup','pointercancel','pointerleave'].forEach(event=>button.addEventListener(event,cancel));
+        button.addEventListener('contextmenu',e=>e.preventDefault());
+    }
+    function handleConfirmClick(event) {
+        if(confirmLongPress && event.detail!==0) {confirmLongPress=false;return;}
+        confirmLongPress=false;grade(3);
+    }
+
     function getUniqueLibraryCards() {
         const seen = new Set();
         const cards = [];
@@ -4006,7 +4130,8 @@
         const accuracy = getAccuracyStats(stat || {});
         const accuracyRate = accuracy.total ? accuracy.correct / accuracy.total : 1;
         const lowAccuracyScore = accuracy.total >= 3 ? (accuracyRate < 0.6 ? 20 : (accuracyRate <= 0.75 ? 10 : 0)) : 0;
-        const lastDate = Number(stat && stat.lastDate) || 0;
+        const risk = getReviewRisk(stat,todayStart);
+        const lastDate = risk.lastGrade || 0;
         const daysSinceReview = lastDate ? Math.max(0, Math.floor((todayStart - getVirtualDate(lastDate).getTime()) / 86400000)) : 0;
         const lastReviewedScore = Math.min(15, daysSinceReview);
         const totalReviews = Number(accuracy.total) || 0;
@@ -4017,9 +4142,10 @@
             card,
             originalIndex,
             overdueDays,
+            riskRank: risk.rank,
             latestWrong,
             lastDate,
-            score: overdueDays * 10 + recentWrongScore + consecutiveWrongScore + lowAccuracyScore + lastReviewedScore + earlyLearningScore
+            score: risk.rank * 1000 + Math.min(90,overdueDays) * 10 + recentWrongScore + consecutiveWrongScore + lowAccuracyScore + lastReviewedScore + earlyLearningScore
         };
     }
 
@@ -4049,6 +4175,7 @@
         });
         const ranked = candidates.map((card, index) => getTodayEssentialPriority(card, findStatsForCard(card, statsSnapshot) || {}, index, todayStart));
         ranked.sort((a, b) =>
+            (b.riskRank - a.riskRank) ||
             (b.score - a.score) ||
             (b.overdueDays - a.overdueDays) ||
             (Number(b.latestWrong) - Number(a.latestWrong)) ||
@@ -4095,6 +4222,8 @@
             showToast('오늘 복습할 문제가 없습니다.');
             return;
         }
+        const riskCounts = prepared.ranked.reduce((a,x)=>(a[x.riskRank]=(a[x.riskRank]||0)+1,a),{});
+        document.getElementById("essential-risk-summary").textContent=`풀이 필수 ${riskCounts[3]||0} · 풀이 권장 ${riskCounts[2]||0} · 확인 가능 ${(riskCounts[1]||0)+(riskCounts[0]||0)}`;
         const options = getEssentialCountOptions(prepared.candidates.length);
         prepared.options = options;
         todayEssentialState.prepared = prepared;
@@ -4186,7 +4315,7 @@
     }
 
     function releaseTodayEssential() {
-        const cards = todayEssentialState.todayCandidates.slice();
+        const cards = todayEssentialState.todayCandidates.filter(card=>isPendingTodayReview(getStats(card)));
         const previousCardId = todayEssentialState.previousCardId;
         todayEssentialState.active = false;
         todayEssentialState.prepared = null;
@@ -4212,7 +4341,7 @@
 
     function continueRemainingTodayReview() {
         const processed = todayEssentialState.processedIds;
-        activeDeck = todayEssentialState.todayCandidates.filter(card => !processed.has(getTodayEssentialCardId(card)));
+        activeDeck = todayEssentialState.todayCandidates.filter(card => !processed.has(getTodayEssentialCardId(card)) && isPendingTodayReview(getStats(card)));
         todayEssentialState.active = false;
         document.getElementById('essential-complete-modal').style.display = 'none';
         currentIndex = 0;
@@ -4222,6 +4351,11 @@
         if(!activeDeck.length) showToast('남은 오늘 복습 문제가 없습니다.');
     }
 
+    function matchesPendingStudyFilters(card, stats = getStatsStore()) {
+        const modes=getActiveFilterModes();
+        const stat=findStatsForCard(card,stats)||{};
+        return !modes.length || modes.some(mode=>mode==='due'?isPendingTodayReview(stat):!!stat[mode]);
+    }
     function applyFilterAndSort(isRestore = false) {
         if(!currentDeckName) return;
         const stats = getStatsStore();
@@ -4232,6 +4366,7 @@
                     const savedIds = JSON.parse(savedIdsStr);
                     const cardMap = new Map(); originalDeck.forEach(c => getCardStatsCandidates(c).forEach(id => cardMap.set(String(id), c)));
                     activeDeck = []; savedIds.forEach(id => { const key = String(id); if (cardMap.has(key)) activeDeck.push(cardMap.get(key)); });
+                    if(getActiveFilterModes().includes("due")) activeDeck=activeDeck.filter(c=>matchesPendingStudyFilters(c,stats));
                     if (activeDeck.length > 0) {
                         currentIndex = resolveIndexForDeck(true);
                         updateFilterStatusUI(); renderDeckTree(); showCard(); return; 
@@ -4249,14 +4384,14 @@
         if(selectedFilters.length) {
             filtered = filtered.filter(c => selectedFilters.some(mode => {
                 const s = findStatsForCard(c, stats) || {};
-                if(mode === 'due') return isTodayReviewTarget(s);
+                if(mode === 'due') return isPendingTodayReview(s);
                 return !!s[mode];
             }));
         }
         if(isRestore) {
             const targetCardId = getStartupTargetCardId(getStartupViewState());
             const targetCard = originalDeck.find(c => String(c.id) === String(targetCardId) || (Array.isArray(c.idCandidates) && c.idCandidates.map(String).includes(String(targetCardId))));
-            if(targetCard && !filtered.some(c => String(c.id) === String(targetCard.id))) filtered.unshift(targetCard);
+            if(targetCard && (!selectedFilters.includes("due") || matchesPendingStudyFilters(targetCard,stats)) && !filtered.some(c => String(c.id) === String(targetCard.id))) filtered.unshift(targetCard);
         }
         
         const originalOrder = new Map();
@@ -4521,11 +4656,18 @@
     function showCard() {
         answerRevealed = false;
         document.querySelectorAll('.image-pin-floating-hit').forEach(button => button.remove());
-        resetZoom(); if(!activeDeck.length) { reviewTimingState = null; document.getElementById('question-section').innerHTML="<h3 style='text-align:center;'>카드가 없습니다.</h3>"; return; }
+        resetZoom(); if(!activeDeck.length) {
+            reviewTimingState=null;
+            document.getElementById('question-section').textContent=getActiveFilterModes().includes('due')?'남은 오늘 복습 문제가 없습니다.':'카드가 없습니다.';
+            document.getElementById('card-counter').textContent='0 / 0';
+            ['card-info','answer-section','click-guide','divider','grade-area','nav-area'].forEach(id=>document.getElementById(id).style.display='none');
+            return;
+        }
+        document.getElementById('card-info').style.display='flex';
         const card = activeDeck[currentIndex]; const s = getStats(card);
         beginReviewTiming(card);
         document.getElementById('card-counter').innerText = `${currentIndex + 1} / ${activeDeck.length}`;
-        updateStatsUI(s); updateIconsUI(s); renderRateHistory(s);
+        updateStatsUI(s); updateIconsUI(s); renderRateHistory(s); updateGradePreviews();
         updateNoteButtonState();
         const qDiv = document.getElementById('question-section'); qDiv.innerHTML = ''; qDiv.appendChild(createDOM(card.q, false));
         const aDiv = document.getElementById('answer-section'); aDiv.innerHTML = ''; aDiv.appendChild(createDOM(card.a, true));
@@ -4811,7 +4953,7 @@
 
     function getGradeHistoryScoreText(item) {
         const score = Number(item.score);
-        if (isConfirmHistoryItem(item)) return gradeHistoryLabels[3] || '확인';
+        if (isConfirmHistoryItem(item)) return item.confirmMode==='fast' ? (item.confirmDueDate?'빠른 확인':'빠른 확인 (일정 유지)') : item.confirmMode==='simple'?'단순 확인':(gradeHistoryLabels[3] || '확인');
         if (score === 3) return `확인 (${Math.round((Number(item.points) || 0) * 100)}%)`;
         return gradeHistoryLabels[score] || '기록';
     }
@@ -4829,6 +4971,7 @@
             };
         }
 
+        if(history.every(isConfirmHistoryItem)) return {correct:Number(stat.correct)||0,total:Number(stat.total)||0};
         return history.reduce((acc, item) => {
             if (isConfirmHistoryItem(item)) return acc;
             const score = Number(item.score);
@@ -4901,6 +5044,9 @@
             }
             lastDate = itemTime;
 
+            if (isConfirm && item.confirmMode==='fast' && Number(item.confirmDueDate)>0 && Number(item.confirmInterval)>0 && fsrs.reps>0) {
+                interval=Number(item.confirmInterval);dueDate=Number(item.confirmDueDate);
+            }
             if (!isConfirm) {
                 fsrs.reps++;
                 if (fsrs.reps === 1) {
@@ -4957,7 +5103,7 @@
         showToast('히스토리를 삭제하고 정답률/복습일을 다시 계산했습니다.', 'success');
     }
 
-    function revealAnswer() { answerRevealed = true; document.getElementById('click-guide').style.display = 'none'; document.getElementById('divider').style.display = 'block'; document.getElementById('answer-section').style.display = 'block'; document.getElementById('grade-area').style.display = 'flex'; refreshCurrentImagePinControls(); updateFloatingImagePinLayout(); persistCurrentViewState(false); markLocalDataUpdated(); }
+    function revealAnswer() { if(!activeDeck[currentIndex])return; updateGradePreviews(); answerRevealed = true; document.getElementById('click-guide').style.display = 'none'; document.getElementById('divider').style.display = 'block'; document.getElementById('answer-section').style.display = 'block'; document.getElementById('grade-area').style.display = 'flex'; refreshCurrentImagePinControls(); updateFloatingImagePinLayout(); persistCurrentViewState(false); markLocalDataUpdated(); }
     function moveCard(d) { let n = currentIndex + d; if(n >= 0 && n < activeDeck.length) { previousCardIndex = currentIndex; currentIndex = n; saveCurrentProgress(); showCard(); } }
 
     function grade(score) {
@@ -4974,58 +5120,23 @@
         const sourceStats = data[id] || findStatsForCard(card, data) || { correct: 0, total: 0, lastDate: 0 };
         data[id] = cloneStatsForDirectMatch(sourceStats);
         
-        if(!data[id].fsrs) data[id].fsrs = { D: 5.0, S: 0, reps: 0 };
-        let fsrs = data[id].fsrs;
-
-        if(!Array.isArray(data[id].history)) data[id].history = [];
-        let historyPoints;
-        if (score === 3) { 
-            historyPoints = null;
-        } else { 
-            historyPoints = gradeHistoryPoints[score] || 0;
-            data[id].total++; 
-            if(score === 2) data[id].correct++; 
-            else if(score === 1) data[id].correct += 0.5; 
+        const now=Date.now();
+        const schedule=score===3 ? (confirmMode==='fast'?getFastConfirmSchedule(sourceStats,now):null) : predictGradeSchedule(sourceStats,score,id,now);
+        if(!Array.isArray(data[id].history)) data[id].history=[];
+        if(score!==3) {
+            data[id].total=(Number(data[id].total)||0)+1;
+            data[id].correct=(Number(data[id].correct)||0)+(gradeHistoryPoints[score]||0);
         }
-        const wasTodayReview = isTodayReviewTarget(sourceStats);
+        const wasTodayReview=isTodayReviewTarget(sourceStats,now);
         data[id].history.push({
-            id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
-            score,
-            result: score === 3 ? 'confirm' : undefined,
-            type: score === 3 ? 'confirm' : undefined,
-            points: historyPoints,
-            wasTodayReview,
-            time: Date.now()
+            id:`${now}_${Math.random().toString(36).slice(2)}`,score,
+            result:score===3?'confirm':undefined,type:score===3?'confirm':undefined,
+            points:score===3?null:(gradeHistoryPoints[score]||0),wasTodayReview,time:now,
+            ...(score===3?{confirmMode,...(schedule?{confirmDueDate:schedule.dueDate,confirmInterval:schedule.interval}:{})}:{})
         });
-        
-        if (score !== 3) {
-            fsrs.reps++;
-            if (fsrs.reps === 1) {
-                if (score === 0) { fsrs.D = 7.0; fsrs.S = 1.0; }
-                else if (score === 1) { fsrs.D = 6.0; fsrs.S = 2.0; }
-                else if (score === 2) { fsrs.D = 5.0; fsrs.S = 3.0; }
-            } else {
-                if (score === 0) fsrs.D = Math.min(10, fsrs.D + 1.5);
-                else if (score === 1) fsrs.D = Math.min(10, fsrs.D + 0.5);
-                else if (score === 2) fsrs.D = Math.max(1, fsrs.D - 0.5);
-
-                if (score === 0) { fsrs.S = Math.max(1, fsrs.S * 0.2); } 
-                else { let factor = score === 1 ? 1.2 : (1 + 0.5 * (11 - fsrs.D)); fsrs.S = fsrs.S * factor; }
-            }
-
-            let intervalFactor = Math.log(targetRetention) / Math.log(0.90);
-            let interval = Math.max(1, Math.round(fsrs.S * intervalFactor));
-            if (interval > 3) {
-                let fuzz = 0;
-                if (interval >= 4 && interval <= 7) fuzz = 1;
-                else if (interval >= 8 && interval <= 15) fuzz = 2;
-                else if (interval >= 16) fuzz = 3;
-                const randomFuzz = Math.floor(Math.random() * (2 * fuzz + 1)) - fuzz;
-                interval = Math.max(1, interval + randomFuzz);
-            }
-            data[id].interval = interval;
-            const now = new Date(); now.setHours(0,0,0,0);
-            data[id].dueDate = now.getTime() + (interval * 86400000);
+        if(schedule) {
+            data[id].interval=schedule.interval;data[id].dueDate=schedule.dueDate;
+            if(score!==3) data[id].fsrs=schedule.fsrs;
         }
         data[id].lastDate = Date.now(); 
         data[id].updatedAt = data[id].lastDate;
@@ -5033,6 +5144,12 @@
         saveStatsToIndexedDBFallback(data);
         markLocalDataUpdated(data[id].updatedAt);
         markTodayPlanCardCompleted(card);
+        const removeFromDueQueue = !todayEssentialState.active && getActiveFilterModes().includes('due') && !matchesPendingStudyFilters(card,data);
+        if(removeFromDueQueue) {
+            activeDeck.splice(currentIndex,1);
+            currentIndex=activeDeck.length?currentIndex%activeDeck.length:0;
+            previousCardIndex=null;
+        }
         saveStudyState('review', { backup: false });
         backupReviewNow();
         updateStatsUI(data[id]);
@@ -5044,7 +5161,12 @@
             nextReviewDate: data[id].dueDate || null,
             fsrs: data[id].fsrs || null
         });
-        // 확인(3)도 정답률/FSRS에는 반영하지 않되, 다른 평가 버튼처럼 다음 카드로 이동한다.
+        if(removeFromDueQueue) {
+            showCard();
+            if(!activeDeck.length) showToast('오늘 복습 완료!','success');
+            return;
+        }
+        // Confirm modes never update accuracy or FSRS stability/difficulty.
         if(todayEssentialState.active) todayEssentialState.processedIds.add(getTodayEssentialCardId(card));
         console.log('NEXT_CARD_START', { fromIndex: currentIndex, activeDeckLength: activeDeck.length });
         if(todayEssentialState.active) {
@@ -5106,6 +5228,9 @@
     }
 
     function updateStatsUI(s) {
+        const rec=document.getElementById('review-recommendation');
+        const risk=getReviewRisk(s);
+        rec.style.display='inline-block';rec.className=`review-recommendation ${risk.level}`;rec.textContent=risk.label;rec.title=risk.reasons.join(' · ');
         const b = document.getElementById('rate-badge');
         s = { ...s, ...getAccuracyStats(s) };
         if(!s.total) { b.innerText="New"; b.className="rate-badge"; }
@@ -5125,7 +5250,9 @@
             const today = new Date(); today.setHours(0,0,0,0);
             const diff = Math.ceil((s.dueDate - today.getTime()) / 86400000);
             dueBadge.style.display = 'inline-block';
-            if(diff <= 0) {
+            if(diff <= 0 && Array.isArray(s.history) && s.history.some(item=>isHistoryItemToday(item))) {
+                dueBadge.innerText='✅ 오늘 복습 완료';dueBadge.className='date-badge badge-today';dueBadge.style.background='';dueBadge.style.color='';dueBadge.style.border='';
+            } else if(diff <= 0) {
                 dueBadge.innerText = "🚨 오늘 복습 필요"; dueBadge.className = 'date-badge badge-1d'; dueBadge.style.background = '#491010'; dueBadge.style.color = '#ff8787'; dueBadge.style.border = '1px solid #ff8787';
             } else {
                 dueBadge.innerText = `📅 ${diff}일 후 복습 추천`; dueBadge.className = 'date-badge badge-old'; dueBadge.style.background = '#182836'; dueBadge.style.color = '#74c0fc'; dueBadge.style.border = '1px solid #1c7ed6';
@@ -6230,6 +6357,7 @@
         originalDeck = snapshotOriginalDeck.length ? snapshotOriginalDeck : snapshotCards;
 
         activeDeck = snapshotCards.length ? snapshotCards : [];
+        if(getActiveFilterModes().includes("due")) {applyFilterAndSort(true);return true;}
 
         if(!activeDeck.length) {
             applyFilterAndSort(true);
@@ -6503,7 +6631,7 @@
         setStorageItem(STORAGE_KEY_SEARCH_QUERY, q);
         if(!q) { applyFilterAndSort(true); return; } 
         const todayPlanAllowed = todayPlanSession ? new Set(todayPlanSession.cardIds) : null;
-        activeDeck = originalDeck.filter(c => (!todayPlanAllowed || todayPlanAllowed.has(String(c.id))) && (c.q.toLowerCase().includes(q) || c.a.toLowerCase().includes(q))); 
+        activeDeck = originalDeck.filter(c => (!todayPlanAllowed || todayPlanAllowed.has(String(c.id))) && (!getActiveFilterModes().includes('due') || matchesPendingStudyFilters(c)) && (c.q.toLowerCase().includes(q) || c.a.toLowerCase().includes(q))); 
         removeStorageItem(STORAGE_KEY_ACTIVE_IDS);
         currentIndex = 0; saveCurrentProgress(); showCard(); 
     }
