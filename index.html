@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.13 - 빠른 복습·풀이 추천 -->
+<!-- preview: Yople v11.23.14 - 확인 복습일 표시 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.13 - 빠른 복습·풀이 추천</title>
+<title>Yople v11.23.14 - 확인 복습일 표시</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -340,7 +340,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.13 - 빠른 복습·풀이 추천</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.14 - 확인 복습일 표시</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -684,7 +684,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.13 - 빠른 복습·풀이 추천';
+    const APP_VERSION = 'Yople v11.23.14 - 확인 복습일 표시';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -3993,8 +3993,12 @@
         const schedule=confirmMode==='fast'?getFastConfirmSchedule(stat,timestamp):null;
         if(schedule) return `${schedule.interval}일 후`;
         const due=Number(stat.dueDate)||0;
-        const days=Math.ceil((due-getLocalTodayBounds(timestamp).start)/86400000);
-        return due && days>0 ? `${days}일 후 유지` : '일정 유지';
+        if(!due || !Number.isFinite(due)) return '미예약';
+        const today=new Date(timestamp), next=new Date(due);
+        const dayNumber=date=>Date.UTC(date.getFullYear(),date.getMonth(),date.getDate())/86400000;
+        // Today's confirmation removes the card from today's queue, not from its existing schedule.
+        const days=Math.max(1,dayNumber(next)-dayNumber(today));
+        return `${days}일 후`;
     }
     function updateGradePreviews() {
         const card=activeDeck[currentIndex]; if(!card) return;
