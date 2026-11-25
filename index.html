@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<!-- preview: Yople v11.23.15 - 헤더 풀이 추천 -->
+<!-- preview: Yople v11.23.16 - 버튼 내 복습일 표시 -->
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Yople v11.23.15 - 헤더 풀이 추천</title>
+<title>Yople v11.23.16 - 버튼 내 복습일 표시</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <meta name="theme-color" content="#111827">
 <style>
@@ -198,10 +198,12 @@
     .nav-btns, .grade-btns { display: flex; justify-content: space-between; width: 100%; margin: 0; gap: 12px; }
     .nav-btn { flex: 1; background: var(--input-bg); border: 1px solid var(--border); padding: 14px 0; border-radius: 12px; cursor: pointer; font-weight: bold; color: var(--text); font-size: 1rem; text-align: center; transition: 0.2s; }
     .nav-btn:active { background: var(--btn-hover); }
-    .g-btn { flex: 1; padding: 16px 0; border: none; border-radius: 12px; font-weight: bold; color: white; cursor: pointer; font-size: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin: 0; text-align: center; }
-    .grade-option { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
-    .grade-preview { color:var(--text-sub); font-size:.72rem; text-align:center; font-weight:700; white-space:nowrap; min-height:1em; }
+    .g-btn { flex: 1; min-height:54px; padding:5px 2px; border:none; border-radius:12px; font-weight:bold; color:white; cursor:pointer; font-size:1rem; box-shadow:0 2px 4px rgba(0,0,0,0.2); margin:0; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-width:0; }
+    .grade-option { flex:1; min-width:0; display:flex; }
+    .grade-preview { color:inherit; opacity:.92; font-size:11px; line-height:1.2; font-weight:700; white-space:nowrap; min-height:1.2em; pointer-events:none; }
+    .grade-label { line-height:1.25; white-space:nowrap; font-size:inherit; pointer-events:none; }
     .grade-option .g-btn { width:100%; }
+    @media (max-width:360px) { .grade-btns { gap:8px; } .grade-label { font-size:.9rem; } }
     .review-recommendation { font: inherit; font-size:.70rem; line-height:1.25; font-weight:700; margin-top:2px; padding:0 4px; border:0; background:transparent; cursor:pointer; max-width:100%; white-space:nowrap; }
     .review-recommendation.required { color:#ff8787; } .review-recommendation.recommended { color:#ffd43b; }
     .review-recommendation.fast { color:#69db7c; } .review-recommendation.simple { color:var(--text-sub); }
@@ -340,7 +342,7 @@
             
             <button class="btn-refresh" onclick="location.reload()">🔄 사이트 새로고침</button>
         </div>
-        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.15 - 헤더 풀이 추천</div>
+        <div style="margin-top:auto; font-size:0.8rem; color:var(--text-sub); text-align:center;" id="app-version-label">Yople v11.23.16 - 버튼 내 복습일 표시</div>
     </div>
 
     <div class="modal-overlay learning-stats-modal" id="learning-stats-modal">
@@ -568,10 +570,10 @@
     <div class="footer">
         <div class="footer-content">
             <div class="grade-btns" id="grade-area" style="display:none;">
-                <div class="grade-option"><span class="grade-preview" id="grade-preview-0"></span><button class="g-btn bg-x" onclick="grade(0)">모름</button></div>
-                <div class="grade-option"><span class="grade-preview" id="grade-preview-1"></span><button class="g-btn bg-tri" onclick="grade(1)">애매</button></div>
-                <div class="grade-option"><span class="grade-preview" id="grade-preview-2"></span><button class="g-btn bg-o" onclick="grade(2)">맞음</button></div>
-                <div class="grade-option"><span class="grade-preview" id="grade-preview-3"></span><button class="g-btn bg-chk" id="confirm-grade-btn" onclick="handleConfirmClick(event)" style="touch-action:manipulation;user-select:none;-webkit-touch-callout:none;" title="길게 눌러 확인 모드 변경">빠른 확인</button></div>
+                <div class="grade-option"><button type="button" class="g-btn bg-x" onclick="grade(0)"><span class="grade-preview" id="grade-preview-0"></span><span class="grade-label">모름</span></button></div>
+                <div class="grade-option"><button type="button" class="g-btn bg-tri" onclick="grade(1)"><span class="grade-preview" id="grade-preview-1"></span><span class="grade-label">애매</span></button></div>
+                <div class="grade-option"><button type="button" class="g-btn bg-o" onclick="grade(2)"><span class="grade-preview" id="grade-preview-2"></span><span class="grade-label">맞음</span></button></div>
+                <div class="grade-option"><button type="button" class="g-btn bg-chk" id="confirm-grade-btn" onclick="handleConfirmClick(event)" style="touch-action:manipulation;user-select:none;-webkit-touch-callout:none;" title="길게 눌러 확인 모드 변경"><span class="grade-preview" id="grade-preview-3"></span><span class="grade-label" id="confirm-grade-label">빠른 확인</span></button></div>
             </div>
             <div class="nav-btns" id="nav-area">
                 <button class="nav-btn" onclick="moveCard(-1)">◀ 이전</button>
@@ -684,7 +686,7 @@
         deckFile: '행정법.txt',
         imageDirectory: 'images/'
     });
-    const APP_VERSION = 'Yople v11.23.15 - 헤더 풀이 추천';
+    const APP_VERSION = 'Yople v11.23.16 - 버튼 내 복습일 표시';
     const deckSourceUrl = new URL(APP_CONFIG.deckFile, document.baseURI).href;
     const imageBaseUrl = new URL(APP_CONFIG.imageDirectory, document.baseURI).href;
     let library = {}, currentDeckName = null, originalDeck = [], activeDeck = [], currentIndex = 0;
@@ -4010,7 +4012,7 @@
     function updateConfirmModeUI() {
         const label=confirmMode==='fast'?'빠른 복습':'단순 확인';
         document.getElementById('confirm-mode-menu').textContent=`확인 모드: ${label} (변경)`;
-        document.getElementById('confirm-grade-btn').textContent=confirmMode==='fast'?'빠른 확인':'단순 확인';
+        document.getElementById('confirm-grade-label').textContent=confirmMode==='fast'?'빠른 확인':'단순 확인';
         updateGradePreviews();
     }
     function toggleConfirmMode() {
